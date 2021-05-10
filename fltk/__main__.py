@@ -7,15 +7,17 @@ import yaml
 import argparse
 
 import torch.multiprocessing as mp
-from fltk.federator import Federator
+from fltk.federator_fegan import Federator
 from fltk.launch import run_single, run_spawn
 from fltk.util.base_config import BareConfig
 
 logging.basicConfig(level=logging.DEBUG)
 
+
 def add_default_arguments(parser):
     parser.add_argument('--world_size', type=str, default=None,
                         help='Number of entities in the world. This is the number of clients + 1')
+
 
 def main():
     parser = argparse.ArgumentParser(description='Experiment launcher for the Federated Learning Testbed')
@@ -77,6 +79,7 @@ def main():
                 run_single(rank=args.rank, world_size=world_size, host=master_address, args=cfg, nic=nic)
             else:
                 run_spawn(cfg)
+
 
 if __name__ == "__main__":
     main()

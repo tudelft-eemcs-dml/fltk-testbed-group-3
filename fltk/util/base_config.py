@@ -130,7 +130,6 @@ class BareConfig:
             else:
                 self.cuda = False
 
-
     def init_logger(self, logger):
         self.logger = logger
 
