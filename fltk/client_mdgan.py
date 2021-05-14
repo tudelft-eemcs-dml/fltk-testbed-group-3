@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import List
 
 import torch
+from _distutils_hack import override
 from torch.distributed import rpc
 from torch.autograd import Variable
 import logging
@@ -26,21 +27,10 @@ import yaml
 
 from fltk.util.results import EpochData
 
-logging.basicConfig(level=logging.DEBUG)
 
 def _call_method(method, rref, *args, **kwargs):
     """helper for _remote_method()"""
     return method(rref.local_value(), *args, **kwargs)
-
-
-def _remote_method(method, rref, *args, **kwargs):
-    """
-    executes method(*args, **kwargs) on the from the machine that owns rref
-
-    very similar to rref.remote().method(*args, **kwargs), but method() doesn't have to be in the remote scope
-    """
-    args = [method, rref] + list(args)
-    return rpc.rpc_sync(rref.owner(), _call_method, args=args, kwargs=kwargs)
 
 
 def _remote_method_async(method, rref, *args, **kwargs):
@@ -55,128 +45,105 @@ class ClientMDGAN(Client):
     epoch_results: List[EpochData] = []
     epoch_counter = 0
 
-    def __init__(self, id, log_rref, rank, world_size, config=None):
+    def __init__(self, id, log_rref, rank, world_size, config=None, batch_size=20):
         super().__init__(id, log_rref, rank, world_size, config)
         logging.info(f'Welcome to MD client {id}')
-        self.discriminator = Discriminator()
+        self.latent_dim = 10
+        self.batch_size = batch_size
+        self.discriminator = Discriminator(32)
+        self.discriminator.apply(weights_init_normal)
+        self.E = 5
+        self.adversarial_loss = torch.nn.MSELoss()
 
     def init_dataloader(self, ):
         self.args.distributed = True
         self.args.rank = self.rank
         self.args.world_size = self.world_size
-        # self.dataset = DistCIFAR10Dataset(self.args)
         self.dataset = self.args.DistDatasets[self.args.dataset_name](self.args)
+        self.imgs = self.dataset.load_train_dataset()
         self.finished_init = True
 
-        self.discriminator.apply(weights_init_normal)
+        self.batch_size = self.args.DistDatasets[self.args.batch_size](self.args)
+
         logging.info('Done with init')
 
-    def train(self, epoch, Xs=None):
+    def set_batch_size(self, batch_size):
+        self.batch_size = batch_size
+
+    def get_client_list(self, client_list):
+        self.client_list = client_list
+        for idx in range(len(self.client_list)):
+            if self.client_list[idx][1] == self.id:
+                self.client_idx = idx
+                return
+
+    def train_md(self, epoch, Xd):
         """
         :param epoch: Current epoch #
         :type epoch: int
         """
-        if Xs:
-            X_d, X_g = Xs
+        # save model
+        if self.args.should_save_model(epoch):
+            self.save_model(epoch, self.args.get_epoch_save_start_suffix())
 
-            # save model
-            if self.args.should_save_model(epoch):
-                self.save_model(epoch, self.args.get_epoch_save_start_suffix())
+        if self.args.distributed:
+            self.dataset.train_sampler.set_epoch(epoch)
 
-            running_loss = 0.0
-            final_running_loss = 0.0
-            if self.args.distributed:
-                self.dataset.train_sampler.set_epoch(epoch)
+        inputs = self.dataset.load_train_dataset()[0]
+        rnd_indices = np.random.choice(len(inputs), size=self.batch_size)
+        inputs, labels, fake = torch.from_numpy(inputs[rnd_indices]), \
+                               torch.ones(self.batch_size, dtype=torch.float), \
+                               torch.ones(self.batch_size, dtype=torch.float)
 
-            for i, (inputs, labels) in enumerate(self.dataset.get_train_loader(), 1):
-                inputs, labels, fake = inputs.to(self.device), labels.to(self.device), torch.zeros(inputs.shape[0])
+        # zero the parameter gradients
+        self.optimizer.zero_grad()
 
-                # zero the parameter gradients
-                self.optimizer.zero_grad()
+        outputs = self.discriminator(inputs)
 
-                # Sample noise as generator input
-                noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (inputs.shape[0], 100))))
+        # not sure about loss function
+        fake_loss = self.adversarial_loss(self.discriminator(Xd.detach()), fake)
+        real_loss = self.adversarial_loss(outputs, labels)
 
-                outputs = self.discriminator(inputs)
+        d_loss = 0.5 * (real_loss + fake_loss)
+        d_loss.backward()
+        self.optimizer.step()
 
-                real_loss = self.loss_function(outputs, labels)
-                fake_loss = self.loss_function(self.discriminator(X_d.detach()), fake)
-                d_loss = 0.5 * (real_loss + fake_loss)
-                d_loss.backward()
-                self.optimizer.step()
+        # save model
+        if self.args.should_save_model(epoch):
+            self.save_model(epoch, self.args.get_epoch_save_end_suffix())
 
-                # print statistics
-                running_loss += d_loss.item()
-                if i % self.args.get_log_interval() == 0:
-                    self.args.get_logger().info('[%d, %5d] loss: %.3f' % (epoch, i, running_loss / self.args.get_log_interval()))
-                    final_running_loss = running_loss / self.args.get_log_interval()
-                    running_loss = 0.0
+    def calculate_error(self, Xg):
+        # TODO: calculate loss
+        return 203.0
 
-            self.scheduler.step()
+    def get_new_discriminator(self, discriminator):
+        self.discriminator = discriminator
 
-            # save model
-            if self.args.should_save_model(epoch):
-                self.save_model(epoch, self.args.get_epoch_save_end_suffix())
+    def swap_discriminator(self, epoch):
+        client_id = (self.client_idx + epoch) % len(self.client_list)
+        while client_id == self.client_idx:
+            client_id = (client_id + 1) % len(self.client_list)
+        response = _remote_method_async(ClientMDGAN.get_new_discriminator, self.client_list[client_id][0],
+                                        discriminator=self.discriminator)
+        response.wait()
 
-            return final_running_loss, self.get_nn_parameters()
-
-    def test(self):
-        self.net.eval()
-
-        correct = 0
-        total = 0
-        targets_ = []
-        pred_ = []
-        loss = 0.0
-        with torch.no_grad():
-            for (images, labels) in self.dataset.get_test_loader():
-                images, labels = images.to(self.device), labels.to(self.device)
-
-                outputs = self.net(images)
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
-
-                targets_.extend(labels.cpu().view_as(predicted).numpy())
-                pred_.extend(predicted.cpu().numpy())
-
-                loss += self.loss_function(outputs, labels).item()
-
-        accuracy = 100 * correct / total
-        confusion_mat = confusion_matrix(targets_, pred_)
-
-        class_precision = self.calculate_class_precision(confusion_mat)
-        class_recall = self.calculate_class_recall(confusion_mat)
-
-        self.args.get_logger().debug('Test set: Accuracy: {}/{} ({:.0f}%)'.format(correct, total, accuracy))
-        self.args.get_logger().debug('Test set: Loss: {}'.format(loss))
-        self.args.get_logger().debug("Classification Report:\n" + classification_report(targets_, pred_))
-        self.args.get_logger().debug("Confusion Matrix:\n" + str(confusion_mat))
-        self.args.get_logger().debug("Class precision: {}".format(str(class_precision)))
-        self.args.get_logger().debug("Class recall: {}".format(str(class_recall)))
-
-        return accuracy, loss, class_precision, class_recall
-
-    def run_epochs(self, num_epoch, Xs=None):
+    def run_epochs(self, num_epoch, current_epoch=1, Xs=None):
         start_time_train = datetime.datetime.now()
-        loss = weights = None
+        Xd, Xg = Xs
 
         for e in range(num_epoch):
-            loss, weights = self.train(self.epoch_counter, Xs)
+            self.train_md(self.epoch_counter, Xd)
             self.epoch_counter += 1
+
+        error = self.calculate_error(Xg)
         elapsed_time_train = datetime.datetime.now() - start_time_train
         train_time_ms = int(elapsed_time_train.total_seconds()*1000)
 
         start_time_test = datetime.datetime.now()
-        accuracy, test_loss, class_precision, class_recall = self.test()
         elapsed_time_test = datetime.datetime.now() - start_time_test
         test_time_ms = int(elapsed_time_test.total_seconds()*1000)
 
-        data = EpochData(self.epoch_counter, train_time_ms, test_time_ms, loss,
-                         accuracy, test_loss, class_precision, class_recall, client_id=self.id)
+        data = EpochData(self.epoch_counter, train_time_ms, test_time_ms, error, 0, 0, 0, 0, client_id=self.id)
         self.epoch_results.append(data)
 
-        # Copy GPU tensors to CPU
-        for k, v in weights.items():
-            weights[k] = v.cpu()
-        return data, weights
+        return data

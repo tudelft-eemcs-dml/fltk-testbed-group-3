@@ -48,21 +48,7 @@ except ImportError:
     # If not tqdm is not available, provide a mock version of it
     def tqdm(x): return x
 
-from inception import InceptionV3
-from time import time
-import sys
-parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
-parser.add_argument('path', type=str, nargs=2,
-                    help=('Path to the generated images or '
-                          'to .npz statistic files'))
-parser.add_argument('--batch-size', type=int, default=50,
-                    help='Batch size to use')
-parser.add_argument('--dims', type=int, default=2048,
-                    choices=list(InceptionV3.BLOCK_INDEX_BY_DIM),
-                    help=('Dimensionality of Inception features to use. '
-                          'By default, uses pool3 features'))
-parser.add_argument('-c', '--gpu', default='', type=str,
-                    help='GPU to use (leave blank for CPU only)')
+from fltk.util.inception import InceptionV3
 
 
 def get_activations(images, model, batch_size=50, dims=2048,
@@ -107,13 +93,14 @@ def get_activations(images, model, batch_size=50, dims=2048,
         end = start + batch_size
 
         images = all_images[start:end]
-        images.permute(0,3,1,2)
-
-        if cuda:
-            iamges = images.cuda()
+        try:
+            images = torch.from_numpy(images)
+        except:
+            pass
+        images.permute(0, 3, 1, 2)
 
         if images.size()[1] == 1:		#Make 3 channels instead of 1
-            images = torch.cat((images,images,images),1)
+            images = torch.cat((images, images, images),1)
 
         pred = model(images)[0]
 
@@ -241,15 +228,3 @@ def calculate_fid_given_paths(paths, batch_size, cuda, dims):
     fid_value = calculate_frechet_distance(m1, s1, m2, s2)
 
     return fid_value
-
-
-if __name__ == '__main__':
-    args = parser.parse_args()
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-
-    fid_value = calculate_fid_given_paths(args.path,
-                                          args.batch_size,
-                                          args.gpu != '',
-                                          args.dims)
-    print('FID: ', fid_value)
-

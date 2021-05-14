@@ -24,6 +24,7 @@ from fltk.util.tensor_converter import convert_distributed_data_into_numpy
 
 logging.basicConfig(level=logging.DEBUG)
 
+
 def _call_method(method, rref, *args, **kwargs):
     return method(rref.local_value(), *args, **kwargs)
 
@@ -32,9 +33,11 @@ def _remote_method(method, rref, *args, **kwargs):
     args = [method, rref] + list(args)
     return rpc.rpc_sync(rref.owner(), _call_method, args=args, kwargs=kwargs)
 
+
 def _remote_method_async(method, rref, *args, **kwargs):
     args = [method, rref] + list(args)
     return rpc.rpc_async(rref.owner(), _call_method, args=args, kwargs=kwargs)
+
 
 class ClientRef:
     ref = None
@@ -49,6 +52,7 @@ class ClientRef:
 
     def __repr__(self):
         return self.name
+
 
 class Federator:
     """
@@ -67,45 +71,47 @@ class Federator:
     epoch_counter = 0
     client_data = {}
 
-    def __init__(self, client_id_triple, num_epochs = 3, config=None):
+    def __init__(self, client_id_triple, num_epochs=3, config=None, client_type=Client):
         log_rref = rpc.RRef(FLLogger())
+        self.client_type = client_type
         self.log_rref = log_rref
         self.num_epoch = num_epochs
         self.config = config
         self.tb_path = config.output_location
         self.ensure_path_exists(self.tb_path)
         self.tb_writer = SummaryWriter(f'{self.tb_path}/{config.experiment_prefix}_federator')
-        self.create_clients(client_id_triple)
+        self.create_clients(client_id_triple, client_type)
         self.config.init_logger(logging)
 
-    def create_clients(self, client_id_triple):
+    def create_clients(self, client_id_triple, client_type):
         for id, rank, world_size in client_id_triple:
-            client = rpc.remote(id, Client, kwargs=dict(id=id, log_rref=self.log_rref, rank=rank, world_size=world_size, config=self.config))
+            client = rpc.remote(id, client_type, kwargs=dict(id=id, log_rref=self.log_rref, rank=rank,
+                                                             world_size=world_size, config=self.config))
             writer = SummaryWriter(f'{self.tb_path}/{self.config.experiment_prefix}_client_{id}')
             self.clients.append(ClientRef(id, client, tensorboard_writer=writer))
             self.client_data[id] = []
 
-    def select_clients(self, n = 2):
+    def select_clients(self, n=2):
         return random_selection(self.clients, n)
 
     def ping_all(self):
         for client in self.clients:
             logging.info(f'Sending ping to {client}')
             t_start = time.time()
-            answer = _remote_method(Client.ping, client.ref)
+            answer = _remote_method(self.client_type.ping, client.ref)
             t_end = time.time()
             duration = (t_end - t_start)*1000
             logging.info(f'Ping to {client} is {duration:.3}ms')
 
     def rpc_test_all(self):
         for client in self.clients:
-            res = _remote_method_async(Client.rpc_test, client.ref)
+            res = _remote_method_async(self.client_type.rpc_test, client.ref)
             while not res.done():
                 pass
 
     def client_load_data(self):
         for client in self.clients:
-            _remote_method_async(Client.init_dataloader, client.ref)
+            _remote_method_async(self.client_type.init_dataloader, client.ref)
 
     def clients_ready(self):
         all_ready = False
@@ -133,7 +139,7 @@ class Federator:
         client_weights = []
         selected_clients = self.select_clients(self.config.clients_per_round)
         for client in selected_clients:
-            responses.append((client, _remote_method_async(Client.run_epochs, client.ref, num_epoch=epochs)))
+            responses.append((client, _remote_method_async(self.client_type.run_epochs, client.ref, num_epoch=epochs)))
         self.epoch_counter += epochs
         for res in responses:
             epoch_data, weights = res[1].wait()
@@ -155,7 +161,7 @@ class Federator:
         responses = []
         for client in self.clients:
             responses.append(
-                (client, _remote_method_async(Client.update_nn_parameters, client.ref, new_params=updated_model)))
+                (client, _remote_method_async(self.client_type.update_nn_parameters, client.ref, new_params=updated_model)))
 
         for res in responses:
             res[1].wait()
@@ -164,7 +170,7 @@ class Federator:
     def update_client_data_sizes(self):
         responses = []
         for client in self.clients:
-            responses.append((client, _remote_method_async(Client.get_client_datasize, client.ref)))
+            responses.append((client, _remote_method_async(self.client_type.get_client_datasize, client.ref)))
         for res in responses:
             res[0].data_size = res[1].wait()
             logging.info(f'{res[0]} had a result of datasize={res[0].data_size}')
@@ -172,7 +178,7 @@ class Federator:
     def remote_test_sync(self):
         responses = []
         for client in self.clients:
-            responses.append((client, _remote_method_async(Client.test, client.ref)))
+            responses.append((client, _remote_method_async(self.client_type.test, client.ref)))
 
         for res in responses:
             accuracy, loss, class_precision, class_recall = res[1].wait()
@@ -197,6 +203,7 @@ class Federator:
         :return:
         """
         # # Make sure the clients have loaded all the data
+        print('Federator run')
         self.client_load_data()
         self.ping_all()
         self.clients_ready()

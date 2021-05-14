@@ -146,8 +146,3 @@ class FederatorFeGAN(Federator):
         logging.info(f'Saving data')
         self.save_epoch_data()
         logging.info(f'Federator is stopping')
-
-
-if __name__ == '__main__':
-    world_size = 1
-    FederatorFeGAN([(f"client{r}", r, world_size) for r in range(1, world_size)]).run()

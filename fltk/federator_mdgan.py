@@ -1,3 +1,6 @@
+import copy
+import math
+
 from pandas import np
 from torch.autograd import Variable
 from torch.distributed import rpc
@@ -7,6 +10,8 @@ from fltk.federator import *
 from fltk.client_mdgan import ClientMDGAN, _remote_method_async
 from fltk.strategy.client_selection import random_selection
 from fltk.util.fed_avg import average_nn_parameters
+from fltk.util.fid_score import calculate_activation_statistics, calculate_frechet_distance
+from fltk.util.inception import InceptionV3
 from fltk.util.log import FLLogger
 from fltk.nets.md_gan import *
 from fltk.util.weight_init import *
@@ -33,50 +38,97 @@ class FederatorMDGAN(Federator):
 
     """
 
+    # TODO: add lr/bs/latdim to args
     def __init__(self, client_id_triple, num_epochs=3, config=None):
-        super().__init__(client_id_triple, num_epochs, config)
-        self.generator = Generator()
+        super().__init__(client_id_triple, num_epochs, config, ClientMDGAN)
+        self.init_dataloader()
+
+        self.generator = Generator(32)
+        self.generator.apply(weights_init_normal)
         self.optimizer = torch.optim.Adam(self.generator.parameters(),
-                                          lr=self.args.get_learning_rate(),
-                                          betas=(self.args.b1(), self.args.b2()))
+                                          lr=0.0002,
+                                          betas=(0.5, 0.999))
+        self.latent_dim = 10
+        # K <= N
+        self.k = len(client_id_triple) - 1
+        # TODO this is merely wrong - federator cannot access whole dataset
+        self.batch_size = math.floor(self.dataset[0].shape[0] / self.k)
+        self.introduce_clients()
+
+    def introduce_clients(self):
+        ref_clients = []
+        responses = []
+        for client in self.clients:
+            ref_clients.append((client.ref, client.name))
+        for client in self.clients:
+            responses.append(_remote_method_async(ClientMDGAN.get_client_list, client.ref, client_list=ref_clients))
+
+        for res in responses:
+            res.wait()
 
     def init_dataloader(self, ):
         self.config.distributed = True
-        self.dataset = self.config.DistDatasets[self.config.dataset_name](self.config)
+        self.dataset = self.config.DistDatasets[self.config.dataset_name](self.config).load_train_dataset()
+        self.testset = self.config.DistDatasets[self.config.dataset_name](self.config).load_test_dataset()
         self.finished_init = True
 
-        self.generator.apply(weights_init_normal)
         logging.info('Done with init')
 
-    def remote_run_epoch(self, epochs):
+    def ping_all(self):
+        for client in self.clients:
+            logging.info(f'Sending ping to {client}')
+            t_start = time.time()
+            answer = _remote_method(ClientMDGAN.ping, client.ref)
+            t_end = time.time()
+            duration = (t_end - t_start)*1000
+            logging.info(f'Ping to {client} is {duration:.3}ms')
+
+    def rpc_test_all(self):
+        for client in self.clients:
+            res = _remote_method_async(ClientMDGAN.rpc_test, client.ref)
+            while not res.done():
+                pass
+
+    def client_load_data(self):
+        for client in self.clients:
+            _remote_method_async(ClientMDGAN.init_dataloader, client.ref)
+            _remote_method_async(ClientMDGAN.set_batch_size, client.ref, batch_size=self.batch_size)
+
+    def test_generator(self, fl_round):
+        eval_samples = 50
+        fic_model = InceptionV3()
+        test_imgs = self.testset[0]
+        fid_z = Variable(torch.Tensor(np.random.normal(0, 1, (eval_samples, self.latent_dim))))
+        gen_imgs = self.generator(fid_z)
+        mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, fic_model)
+        mu_test, sigma_test = calculate_activation_statistics(test_imgs[:eval_samples], fic_model)
+        fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
+        print("FL-round {} FID Score: {}".format(fl_round, fid))
+
+    def remote_run_epoch(self, epochs, fl_round=0):
         responses = []
-        client_weights = []
-
-        imgs = self.dataset.get_train_loader()
-
-        noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (imgs.shape[0], 100))))
-        # Generate a batch of images
-        X_g = self.generator(noise)
-
-        fake = X_g, torch.zeros(imgs.shape[0])
-        valid = Variable(torch.FloatTensor(imgs.shape[0], 1).fill_(1.0), requires_grad=False)
+        client_errors = []
 
         self.optimizer.zero_grad()
 
-        # Sample noise as generator input
-        z = Variable(torch.FloatTensor(np.random.normal(0, 1, (imgs.shape[0], 100))))
-        X_g = self.generator(z)
-
-        z = Variable(torch.FloatTensor(np.random.normal(0, 1, (imgs.shape[0], 100))))
-        X_d = self.generator(z)
-
         # broadcast generated datasets to clients and get trained discriminators back
         selected_clients = self.select_clients(self.config.clients_per_round)
+
         for client in selected_clients:
-            responses.append((client, _remote_method_async(Client.run_epochs, client.ref, epochs, (X_d, X_g))))
+            # Get some real conformations from the train data, not sure why we need it, not in pseudocode...
+            real = self.dataset[epochs * self.batch_size:(epochs + 1) * self.batch_size]
+            # Sample noise as generator input and feed to clients based on their datat size
+            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            X_g = self.generator(noise)
+
+            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            X_d = self.generator(noise)
+            responses.append((client, _remote_method_async(ClientMDGAN.run_epochs, client.ref,
+                                                           epochs, fl_round, (X_d, X_g))))
+
         self.epoch_counter += epochs
         for res in responses:
-            epoch_data, weights = res[1].wait()
+            epoch_data = res[1].wait()
             self.client_data[epoch_data.client_id].append(epoch_data)
             logging.info(f'{res[0]} had a loss of {epoch_data.loss}')
             logging.info(f'{res[0]} had a epoch data of {epoch_data}')
@@ -89,28 +141,22 @@ class FederatorMDGAN(Federator):
                                         epoch_data.accuracy,  # for every 1000 minibatches
                                         self.epoch_counter * res[0].data_size)
 
-            client_weights.append(weights)
+            client_errors.append(epoch_data.loss)
 
-        # average discriminators from clients and update own generator
-        updated_model = average_nn_parameters(client_weights)
-        discriminator = Discriminator()
-        discriminator.parameters = updated_model
+        # TODO: not sure this is actually correct
 
-        self.optimizer.zero_grad()
-        z = Variable(torch.FloatTensor(np.random.normal(0, 1, (imgs.shape[0], 100))))
-        X_g = self.generator(z)
-        g_loss = torch.nn.MSELoss(discriminator(X_g), valid)
+        client_errors = torch.tensor(client_errors, dtype=torch.float)
+        client_errors.requires_grad = True
+
+        target = torch.zeros(len(client_errors), dtype=torch.float)
+        target.requires_grad = True
+
+        g_loss = torch.nn.L1Loss().forward(client_errors, target)
         g_loss.backward()
         self.optimizer.step()
 
-        responses = []
-        for client in self.clients:
-            responses.append(
-                (client, _remote_method_async(Client.update_nn_parameters, client.ref, new_params=updated_model)))
-
-        for res in responses:
-            res[1].wait()
-        logging.info('Weights are updated')
+        logging.info('Gradient is updated')
+        self.test_generator(fl_round)
 
     def run(self):
         """
@@ -131,7 +177,7 @@ class FederatorMDGAN(Federator):
         epoch_size = self.config.epochs_per_cycle
         for epoch in range(epoch_to_run):
             print(f'Running epoch {epoch}')
-            self.remote_run_epoch(epoch_size)
+            self.remote_run_epoch(epoch_size, epoch)
             addition += 1
         logging.info('Printing client data')
         print(self.client_data)
@@ -139,8 +185,3 @@ class FederatorMDGAN(Federator):
         logging.info(f'Saving data')
         self.save_epoch_data()
         logging.info(f'Federator is stopping')
-
-
-if __name__ == '__main__':
-    world_size = 1
-    FederatorMDGAN([(f"client{r}", r, world_size) for r in range(1, world_size)]).run()

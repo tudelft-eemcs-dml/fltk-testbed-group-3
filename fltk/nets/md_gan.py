@@ -2,12 +2,12 @@ import torch.nn as nn
 
 
 class Generator(nn.Module):
-    def __init__(self):
+    def __init__(self, img_size):
         super(Generator, self).__init__()
 
         # TODO: update to proper image size
-        self.init_size = 32 // 4
-        self.l1 = nn.Sequential(nn.Linear(100, 128 * self.init_size ** 2))
+        self.init_size = img_size // 4
+        self.l1 = nn.Sequential(nn.Linear(10, 128 * self.init_size ** 2))
 
         self.conv_blocks = nn.Sequential(
             nn.Upsample(scale_factor=2),
@@ -18,7 +18,7 @@ class Generator(nn.Module):
             nn.Conv2d(128, 64, 3, stride=1, padding=1),
             nn.BatchNorm2d(64, 0.8),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, 1, 3, stride=1, padding=1),
+            nn.Conv2d(64, 3, 3, stride=1, padding=1),
             nn.Tanh(),
         )
 
@@ -30,7 +30,7 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self):
+    def __init__(self, img_size):
         super(Discriminator, self).__init__()
 
         def discriminator_block(in_filters, out_filters, bn=True):
@@ -40,7 +40,7 @@ class Discriminator(nn.Module):
             return block
 
         self.model = nn.Sequential(
-            *discriminator_block(1, 16, bn=False),
+            *discriminator_block(3, 16, bn=False),
             *discriminator_block(16, 32),
             *discriminator_block(32, 64),
             *discriminator_block(64, 128),
@@ -48,7 +48,7 @@ class Discriminator(nn.Module):
 
         # The height and width of downsampled image
         # TODO: update to proper image size
-        ds_size = 32 // 2 ** 4
+        ds_size = img_size // 2 ** 4
         self.adv_layer = nn.Linear(128 * ds_size ** 2, 1)
 
     def forward(self, img):
