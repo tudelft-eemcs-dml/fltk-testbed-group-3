@@ -7,7 +7,7 @@ import numpy as np
 
 from fltk.client import Client
 from fltk.util.weight_init import *
-from fltk.nets.md_gan import *
+from fltk.nets.ls_gan import *
 
 from fltk.util.results import EpochData, GANEpochData
 
@@ -94,7 +94,6 @@ class ClientMDGAN(Client):
         d_loss.backward()
         self.optimizer.step()
 
-        # save model
         if self.args.should_save_model(epoch):
             self.save_model(epoch, self.args.get_epoch_save_end_suffix())
 

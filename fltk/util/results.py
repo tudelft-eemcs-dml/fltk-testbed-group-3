@@ -35,3 +35,19 @@ class GANEpochData:
         values = self.__dict__.values()
         values = [str(x) for x in values if str(x) != 'F_n']
         return delimeter.join(values)
+
+
+@dataclass
+class FeGANEpochData:
+    epoch_id: int
+    duration_train: int
+    duration_test: int
+    net: Any
+    client_id: str = None
+
+    def to_csv_line(self):
+        delimeter = ','
+        values = self.__dict__.values()
+        values = [str(x) for x in values if str(x) != 'net']
+        return delimeter.join(values)
+

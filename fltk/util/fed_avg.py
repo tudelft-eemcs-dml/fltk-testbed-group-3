@@ -17,23 +17,16 @@ def average_nn_parameters(parameters):
 
 
 # TODO: check that it is indeed correct
-def kl_weighting(model, models_to_avg, entropies, include_federator=True):
-    gp_size = len(models_to_avg)
+def kl_weighting(model, models_to_avg, entropies):
+    print('calculate KL divergence')
     e_w = np.array([np.exp(e.item()) for e in entropies])
+    e_w /= sum(e_w[1:])
 
-    if not include_federator:
-        e_w /= sum(e_w[1:])
-    else:
-        e_w /= sum(e_w)
+    for idx, param in enumerate(model.parameters()):
+        param.data = torch.zeros(param.size())
 
-    for param in model.parameters():
-        if not include_federator:
-            param.data = torch.zeros(param.size() - 1)
-        else:
-            param.data = torch.zeros(param.size())
-        gather_list = [torch.zeros(param.size()) for _ in range(gp_size)]
-
-        for w, t in zip(e_w, gather_list):
-            param.data += t * w
+        for model in models_to_avg:
+            for w, t in zip(e_w, list(model.parameters())[idx]):
+                param.data += t * w
 
     return model

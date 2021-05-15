@@ -1,80 +1,63 @@
-import heapq
-import time
-from typing import List
+import math
+from collections import Counter
+from queue import Queue
 
-import torch
-from dataclass_csv import DataclassWriter
 from pandas import np
 from scipy import stats
-from torch import nn
 from torch.autograd import Variable
-from torch.distributed import rpc
 
-from fltk.client_fegan import ClientFeGAN, _remote_method_async
+from fltk.client_fegan import _remote_method_async, ClientFeGAN
 from fltk.federator import *
-from fltk.strategy.client_selection import balanced_sampling, init_groups
+from fltk.strategy.client_selection import balanced_sampling
 from fltk.util.fed_avg import kl_weighting
-from fltk.util.log import FLLogger
 from fltk.nets.ls_gan import *
+from fltk.util.fid_score import calculate_activation_statistics, calculate_frechet_distance
+from fltk.util.inception import InceptionV3
 from fltk.util.weight_init import *
-from torch.utils.tensorboard import SummaryWriter
-from pathlib import Path
+import matplotlib.pyplot as plt
 import logging
-
-from fltk.util.results import EpochData
 
 logging.basicConfig(level=logging.DEBUG)
 
 
 class FederatorFeGAN(Federator):
-    """
-    Central component of the Federated Learning System: The Federator
-
-    The Federator is in charge of the following tasks:
-    - Have a copy of the global model
-    - Client selection
-    - Aggregating the client model weights/gradients
-    - Saving all the metrics
-        - Use tensorboard to report metrics
-    - Keep track of timing
-
-    """
 
     def __init__(self, client_id_triple, num_epochs=3, config=None):
-        super().__init__(client_id_triple, num_epochs, config)
+        super().__init__(client_id_triple, num_epochs, config, ClientFeGAN)
+        self.groups = []
         self.generator = Generator()
+        self.generator.apply(weights_init_normal)
         self.discriminator = Discriminator()
+        self.discriminator.apply(weights_init_normal)
+        self.latent_dim = 10
+        self.batch_size = 100
+        self.fids = []
 
-    def gather_lbl_count(self, lbl_count):
-        """
-        This function gathers all labels counts from all workers at the server.
-        Args:
-            lbl_count: array of frequency of samples of each class at the current worker
-        returns:
-            workers_classes: array of arrays of labels counts of each class at the server
-        """
-        gather_list = [torch.zeros(len(lbl_count)) for _ in range(size)]
-        res = [count_list.cpu().detach().numpy() for count_list in gather_list]
-        return res
+    def gather_class_distributions(self):
+        responses = []
+        self.class_distributions = []
+        for client in self.clients:
+            responses.append((client, _remote_method_async(ClientFeGAN.return_distribution, client.ref)))
+        for res in responses:
+            dist = res[1].wait()
+            self.class_distributions.append(dist)
 
-    def calculate_entropies(self, freqs):
-        # TODO: get proper num_per_class
-        num_per_class = []
+    def preprocess_groups(self, c=0.3):
+        self.gather_class_distributions()
+        num_per_class = Counter({})
+        for dist in self.class_distributions:
+            num_per_class += Counter(dict(dist))
+
+        num_per_class = dict(num_per_class).values()
+        self.init_groups(c, len(num_per_class))
+
+        # we need entropies for client weighting during kl-divergence calculations
+        # idea from code, not from official paper...
         all_samples = sum(num_per_class)
         rat_per_class = [float(n / all_samples) for n in num_per_class]
-
-        # Calculating entropy of each worker (on the server side) based on these frequencies
-        self.entropies = [stats.entropy(np.array(freq_l) / sum(freq_l), rat_per_class) * (sum(freq_l) / all_samples)
-                          for freq_l in freqs]
-
-    def preprocess_groups(self, n=10, C=0.3):
-        # TODO: fix label counts/frequencies and properly match clients into groups
-        self.freqs = self.gather_lbl_count(lbl_count)
-        self.calculate_entropies(self.freqs)
-        self.groups = init_groups(n, C, self.freqs, self.clients)
-
-    def select_clients(self, round):
-        return balanced_sampling(self.groups, round)
+        cleaned_distributions = [[c for _, c in dist] for dist in self.class_distributions]
+        self.entropies = [stats.entropy(np.array(freq_l)/sum(freq_l), rat_per_class) * (sum(freq_l) / all_samples)
+                          for freq_l in cleaned_distributions]
 
     def init_dataloader(self, ):
         self.config.distributed = True
@@ -85,38 +68,109 @@ class FederatorFeGAN(Federator):
         self.discriminator.apply(weights_init_normal)
         logging.info('Done with init')
 
+    # TODO: cleanup
+    def init_groups(self, c, label_size):
+        gp_size = math.ceil(c * len(self.clients))
+        done = False
+        size = len(self.clients)
+
+        wrk_cls = [[False for i in range(label_size)] for j in range(size)]
+        cls_q = [Queue(maxsize=size) for _ in range(10)]
+        for i, cls_list in enumerate(self.class_distributions):
+            wrk_cls[i] = [True if freq != 0 else False for _, freq in cls_list]
+        for worker, class_list in enumerate(reversed(wrk_cls)):
+            for cls, exist in enumerate(class_list):
+                if exist:
+                    cls_q[cls].put(size - worker - 1)
+        taken_count = [0 for _ in range(label_size)]
+
+        print('generating balanced groups for training...')
+        while not done:
+            visited = [False for _ in range(size)]
+            g = []
+            for _ in range(gp_size):
+                cls = np.where(taken_count == np.amin(taken_count))[0][0]
+                assert 0 <= cls <= len(taken_count)
+                done_q = False
+                count = 0
+                while not done_q:
+                    wrkr = cls_q[cls].get()
+                    if not visited[wrkr] and wrk_cls[wrkr][cls]:
+                        g.append(wrkr)
+                        taken_count += self.class_distributions[wrkr][1]
+                        visited[wrkr] = True
+                        done_q = True
+                    cls_q[cls].put(wrkr)
+                    count += 1
+                    if count == size:
+                        done_q = True
+
+            self.groups.append(g)
+            # TODO: should be hyperparam
+            if len(self.groups) > 10:
+                done = True
+
+    def test(self, fl_round):
+        file_output = f'./{self.config.output_location}'
+        self.ensure_path_exists(file_output)
+        fic_model = InceptionV3()
+        test_imgs = self.dataset.load_test_dataset()[0]
+        fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+        gen_imgs = self.generator(fid_z)
+        mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, fic_model)
+        mu_test, sigma_test = calculate_activation_statistics(test_imgs[:self.batch_size], fic_model)
+        fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
+        print("FL-round {} FID Score: {}".format(fl_round, fid))
+
+        self.fids.append(fid)
+
+    def checkpoint(self, fl_round):
+        # For fault tolerance
+        file_output = f'./{self.config.output_location}'
+        self.ensure_path_exists(file_output)
+        print("saving checkpoint...")
+        state = {'disc': self.discriminator.state_dict(), 'gen': self.generator.state_dict(), 'epoch': fl_round,
+                 'fl_round': fl_round}
+        torch.save(state, file_output + "/checkpoint")
+
+    def save_fid_data(self):
+        file_output = f'./{self.config.output_location}'
+        self.ensure_path_exists(file_output)
+
+        plt.plot(range(self.config.epochs), self.fids)
+        plt.xlabel('Epochs')
+        plt.ylabel('FID')
+
+        filename = f'{file_output}/fid_{self.config.epochs}_epochs_fe_gan.png'
+        logging.info(f'Saving data at {filename}')
+
+        plt.savefig(filename)
+
     def remote_run_epoch(self, epochs, epoch=None):
         responses = []
         client_generators = []
         client_discriminators = []
 
-        # broadcast generated datasets to clients and get trained discriminators back
-        selected_clients = self.select_clients(epoch)
+        # broadcast generator and discriminator to clients
+        selected_clients = balanced_sampling(self.clients, self.groups, epoch)
         for client in selected_clients:
-            responses.append((client, _remote_method_async(Client.run_epochs, client.ref, epochs,
+            responses.append((client, _remote_method_async(ClientFeGAN.run_epochs, client.ref, epochs,
                                                            (self.generator, self.discriminator))))
         self.epoch_counter += epochs
         for res in responses:
-            epoch_data, models = res[1].wait()
+            epoch_data = res[1].wait()
             self.client_data[epoch_data.client_id].append(epoch_data)
-            logging.info(f'{res[0]} had a loss of {epoch_data.loss}')
             logging.info(f'{res[0]} had a epoch data of {epoch_data}')
 
-            res[0].tb_writer.add_scalar('training loss',
-                                        epoch_data.loss_train,  # for every 1000 minibatches
-                                        self.epoch_counter * res[0].data_size)
-
-            res[0].tb_writer.add_scalar('accuracy',
-                                        epoch_data.accuracy,  # for every 1000 minibatches
-                                        self.epoch_counter * res[0].data_size)
-
-            client_generators.append(models)
-            client_discriminators.append(models)
+            client_generators.append(epoch_data.net[0])
+            client_discriminators.append(epoch_data.net[1])
 
         selected_entropies = [self.entropies[idx] for idx in range(len(self.clients))
                               if self.clients[idx] in selected_clients]
         self.generator, self.discriminator = kl_weighting(self.generator, client_generators, selected_entropies), \
                                              kl_weighting(self.discriminator, client_discriminators, selected_entropies)
+
+        self.test(epoch)
 
     def run(self):
         """
@@ -143,6 +197,5 @@ class FederatorFeGAN(Federator):
         logging.info('Printing client data')
         print(self.client_data)
 
-        logging.info(f'Saving data')
-        self.save_epoch_data()
         logging.info(f'Federator is stopping')
+        self.save_fid_data()

@@ -9,7 +9,7 @@ from fltk.federator import *
 from fltk.client_mdgan import ClientMDGAN, _remote_method_async
 from fltk.util.fid_score import calculate_activation_statistics, calculate_frechet_distance
 from fltk.util.inception import InceptionV3
-from fltk.nets.md_gan import *
+from fltk.nets.ls_gan import *
 from fltk.util.weight_init import *
 import logging
 import matplotlib.pyplot as plt
@@ -18,18 +18,6 @@ logging.basicConfig(level=logging.DEBUG)
 
 
 class FederatorMDGAN(Federator):
-    """
-    Central component of the Federated Learning System: The Federator
-
-    The Federator is in charge of the following tasks:
-    - Have a copy of the global model
-    - Client selection
-    - Aggregating the client model weights/gradients
-    - Saving all the metrics
-        - Use tensorboard to report metrics
-    - Keep track of timing
-
-    """
 
     # TODO: add lr/bs/latdim to args
     def __init__(self, client_id_triple, num_epochs=3, config=None):
@@ -103,9 +91,15 @@ class FederatorMDGAN(Federator):
         self.fids.append(fid)
 
     def w_grad(self, Fs):
-        w_grads = torch.sum(Fs, dim=0) / (self.batch_size * len(self.clients))
+        w_grads = []
+        for param in self.generator.parameters():
+            for w in torch.flatten(param):
+                w = torch.sum(Fs) / (self.batch_size * len(self.clients))
+                w_grads.append(w)
 
-        return w_grads
+        print(len(w_grads))
+
+        return Variable(torch.FloatTensor(w_grads))
 
     def J_generator(self, Zg):
         return (1 / self.batch_size) * sum(torch.log(1 - self.discriminator(self.generator(Zg))))
@@ -150,15 +144,15 @@ class FederatorMDGAN(Federator):
             client_errors.append(epoch_data.F_n)
 
         # TODO: using wrong loss with server discriminator, batch size divided to fit memory!!!
-        # client_errors = torch.stack(client_errors)
-        # g_loss = self.w_grad(client_errors)
+        client_errors = torch.stack(client_errors)
+        g_loss = self.w_grad(client_errors)
 
-        del X_g
-        del X_d
-        noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size // 5, self.latent_dim))))
-        g_loss = self.J_generator(noise)
+        # del X_g
+        # del X_d
+        # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size // 5, self.latent_dim))))
+        # g_loss = self.J_generator(noise)
 
-        g_loss.backward()
+        g_loss.backward(self.generator.parameters())
         self.optimizer.step()
 
         logging.info('Gradient is updated')
