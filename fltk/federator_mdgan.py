@@ -1,25 +1,18 @@
-import copy
 import math
+import random
 
 from pandas import np
 from torch.autograd import Variable
-from torch.distributed import rpc
 
 from fltk.client import _remote_method
 from fltk.federator import *
 from fltk.client_mdgan import ClientMDGAN, _remote_method_async
-from fltk.strategy.client_selection import random_selection
-from fltk.util.fed_avg import average_nn_parameters
 from fltk.util.fid_score import calculate_activation_statistics, calculate_frechet_distance
 from fltk.util.inception import InceptionV3
-from fltk.util.log import FLLogger
 from fltk.nets.md_gan import *
 from fltk.util.weight_init import *
-from torch.utils.tensorboard import SummaryWriter
-from pathlib import Path
 import logging
-
-from fltk.util.results import EpochData
+import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -52,8 +45,10 @@ class FederatorMDGAN(Federator):
         # K <= N
         self.k = len(client_id_triple) - 1
         # TODO this is merely wrong - federator cannot access whole dataset
-        self.batch_size = math.floor(self.dataset[0].shape[0] / self.k)
+        self.batch_size = math.floor(self.dataset[0].shape[0] / self.k) // 10
         self.introduce_clients()
+        self.fids = []
+        self.discriminator = Discriminator(32)
 
     def introduce_clients(self):
         ref_clients = []
@@ -105,6 +100,16 @@ class FederatorMDGAN(Federator):
         fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
         print("FL-round {} FID Score: {}".format(fl_round, fid))
 
+        self.fids.append(fid)
+
+    def w_grad(self, Fs):
+        w_grads = torch.sum(Fs, dim=0) / (self.batch_size * len(self.clients))
+
+        return w_grads
+
+    def J_generator(self, Zg):
+        return (1 / self.batch_size) * sum(torch.log(1 - self.discriminator(self.generator(Zg))))
+
     def remote_run_epoch(self, epochs, fl_round=0):
         responses = []
         client_errors = []
@@ -114,49 +119,63 @@ class FederatorMDGAN(Federator):
         # broadcast generated datasets to clients and get trained discriminators back
         selected_clients = self.select_clients(self.config.clients_per_round)
 
-        for client in selected_clients:
-            # Get some real conformations from the train data, not sure why we need it, not in pseudocode...
-            real = self.dataset[epochs * self.batch_size:(epochs + 1) * self.batch_size]
-            # Sample noise as generator input and feed to clients based on their datat size
+        X_g = []
+        X_d = []
+        for i in range(self.k):
             noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-            X_g = self.generator(noise)
+            X_g.append(self.generator(noise))
 
             noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-            X_d = self.generator(noise)
+            X_d.append(self.generator(noise))
+
+        samples_d = [random.randrange(self.k) for _ in range(len(selected_clients))]
+        samples_g = [random.randrange(self.k) for _ in range(len(selected_clients))]
+
+        for id, client in enumerate(selected_clients):
+            # Sample noise as generator input and feed to clients based on their datat size
+            X_d_i = X_d[samples_d[id]]
+            X_g_i = X_g[samples_g[id]]
+
             responses.append((client, _remote_method_async(ClientMDGAN.run_epochs, client.ref,
-                                                           epochs, fl_round, (X_d, X_g))))
+                                                           epochs, fl_round, (X_d_i, X_g_i))))
 
         self.epoch_counter += epochs
         for res in responses:
             epoch_data = res[1].wait()
             self.client_data[epoch_data.client_id].append(epoch_data)
-            logging.info(f'{res[0]} had a loss of {epoch_data.loss}')
             logging.info(f'{res[0]} had a epoch data of {epoch_data}')
 
-            res[0].tb_writer.add_scalar('training loss',
-                                        epoch_data.loss_train,  # for every 1000 minibatches
-                                        self.epoch_counter * res[0].data_size)
+            epoch_data.F_n.require_grad = True
 
-            res[0].tb_writer.add_scalar('accuracy',
-                                        epoch_data.accuracy,  # for every 1000 minibatches
-                                        self.epoch_counter * res[0].data_size)
+            client_errors.append(epoch_data.F_n)
 
-            client_errors.append(epoch_data.loss)
+        # TODO: using wrong loss with server discriminator, batch size divided to fit memory!!!
+        # client_errors = torch.stack(client_errors)
+        # g_loss = self.w_grad(client_errors)
 
-        # TODO: not sure this is actually correct
+        del X_g
+        del X_d
+        noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size // 5, self.latent_dim))))
+        g_loss = self.J_generator(noise)
 
-        client_errors = torch.tensor(client_errors, dtype=torch.float)
-        client_errors.requires_grad = True
-
-        target = torch.zeros(len(client_errors), dtype=torch.float)
-        target.requires_grad = True
-
-        g_loss = torch.nn.L1Loss().forward(client_errors, target)
         g_loss.backward()
         self.optimizer.step()
 
         logging.info('Gradient is updated')
         self.test_generator(fl_round)
+
+    def save_fid_data(self):
+        file_output = f'./{self.config.output_location}'
+        self.ensure_path_exists(file_output)
+
+        plt.plot(range(self.config.epochs), self.fids)
+        plt.xlabel('Epochs')
+        plt.ylabel('FID')
+
+        filename = f'{file_output}/fid_{self.config.epochs}_epochs_md_gan.png'
+        logging.info(f'Saving data at {filename}')
+
+        plt.savefig(filename)
 
     def run(self):
         """
@@ -182,6 +201,7 @@ class FederatorMDGAN(Federator):
         logging.info('Printing client data')
         print(self.client_data)
 
-        logging.info(f'Saving data')
-        self.save_epoch_data()
+        # logging.info(f'Saving data')
+        # self.save_epoch_data()
         logging.info(f'Federator is stopping')
+        self.save_fid_data()

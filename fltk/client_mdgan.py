@@ -1,31 +1,15 @@
-import copy
 import datetime
-import os
-import random
-import time
-from dataclasses import dataclass
 from typing import List
 
-import torch
-from _distutils_hack import override
 from torch.distributed import rpc
-from torch.autograd import Variable
 import logging
 import numpy as np
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import classification_report
 
 from fltk.client import Client
-from fltk.schedulers import MinCapableStepLR
-from fltk.util.arguments import Arguments
-from fltk.util.fed_avg import average_nn_parameters
 from fltk.util.weight_init import *
-from fltk.util.log import FLLogger
 from fltk.nets.md_gan import *
 
-import yaml
-
-from fltk.util.results import EpochData
+from fltk.util.results import EpochData, GANEpochData
 
 
 def _call_method(method, rref, *args, **kwargs):
@@ -98,13 +82,15 @@ class ClientMDGAN(Client):
         # zero the parameter gradients
         self.optimizer.zero_grad()
 
-        outputs = self.discriminator(inputs)
+        # outputs = self.discriminator(inputs)
 
-        # not sure about loss function
-        fake_loss = self.adversarial_loss(self.discriminator(Xd.detach()), fake)
-        real_loss = self.adversarial_loss(outputs, labels)
+        # not sure about loss function - shall we use A_hat / B_hat?
+        # fake_loss = self.adversarial_loss(self.discriminator(Xd.detach()), fake)
+        # real_loss = self.adversarial_loss(outputs, labels)
+        fake_loss = self.B_hat(Xd)
+        real_loss = self.A_hat(inputs)
 
-        d_loss = 0.5 * (real_loss + fake_loss)
+        d_loss = (real_loss + fake_loss)
         d_loss.backward()
         self.optimizer.step()
 
@@ -112,9 +98,17 @@ class ClientMDGAN(Client):
         if self.args.should_save_model(epoch):
             self.save_model(epoch, self.args.get_epoch_save_end_suffix())
 
+    def A_hat(self, Xr):
+        return (1 / self.batch_size) * sum(torch.log(self.discriminator(Xr)))
+
+    def B_hat(self, Xg):
+        return (1 / self.batch_size) * sum(torch.log(1 - self.discriminator(Xg)))
+
     def calculate_error(self, Xg):
-        # TODO: calculate loss
-        return 203.0
+        b_hat = self.B_hat(Xg)
+        b_hat.backward(retain_graph=True)
+        print(type(Xg.grad))
+        return Xg.grad
 
     def get_new_discriminator(self, discriminator):
         self.discriminator = discriminator
@@ -143,7 +137,7 @@ class ClientMDGAN(Client):
         elapsed_time_test = datetime.datetime.now() - start_time_test
         test_time_ms = int(elapsed_time_test.total_seconds()*1000)
 
-        data = EpochData(self.epoch_counter, train_time_ms, test_time_ms, error, 0, 0, 0, 0, client_id=self.id)
+        data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, error, client_id=self.id)
         self.epoch_results.append(data)
 
         return data
