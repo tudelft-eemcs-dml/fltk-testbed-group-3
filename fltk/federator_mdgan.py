@@ -37,6 +37,7 @@ class FederatorMDGAN(Federator):
         self.introduce_clients()
         self.fids = []
         self.discriminator = Discriminator(32)
+        self.inceptions = []
 
     def introduce_clients(self):
         ref_clients = []
@@ -86,9 +87,10 @@ class FederatorMDGAN(Federator):
         mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, fic_model)
         mu_test, sigma_test = calculate_activation_statistics(test_imgs[:eval_samples], fic_model)
         fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
-        print("FL-round {} FID Score: {}".format(fl_round, fid))
+        print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
         self.fids.append(fid)
+        self.inceptions.append(mu_gen)
 
     def w_grad(self, Fs):
         w_grads = []
@@ -144,27 +146,29 @@ class FederatorMDGAN(Federator):
             client_errors.append(epoch_data.F_n)
 
         # TODO: using wrong loss with server discriminator, batch size divided to fit memory!!!
-        client_errors = torch.stack(client_errors)
-        g_loss = self.w_grad(client_errors)
+        # client_errors = torch.stack(client_errors)
+        # g_loss = self.w_grad(client_errors)
 
-        # del X_g
-        # del X_d
-        # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size // 5, self.latent_dim))))
-        # g_loss = self.J_generator(noise)
+        del X_g
+        del X_d
+        noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size // 5, self.latent_dim))))
+        g_loss = self.J_generator(noise)
 
+        # g_loss.backward(self.generator.parameters())
         g_loss.backward(self.generator.parameters())
         self.optimizer.step()
 
         logging.info('Gradient is updated')
         self.test_generator(fl_round)
 
-    def save_fid_data(self):
+    def plot_score_data(self):
         file_output = f'./{self.config.output_location}'
         self.ensure_path_exists(file_output)
 
-        plt.plot(range(self.config.epochs), self.fids)
+        plt.plot(range(self.config.epochs), self.fids, 'b')
+        # plt.plot(range(self.config.epochs), self.inceptions, 'r')
         plt.xlabel('Epochs')
-        plt.ylabel('FID')
+        plt.ylabel('Score')
 
         filename = f'{file_output}/fid_{self.config.epochs}_epochs_md_gan.png'
         logging.info(f'Saving data at {filename}')
@@ -188,14 +192,18 @@ class FederatorMDGAN(Federator):
         addition = 0
         epoch_to_run = self.config.epochs
         epoch_size = self.config.epochs_per_cycle
+        start_time_train = datetime.datetime.now()
         for epoch in range(epoch_to_run):
             print(f'Running epoch {epoch}')
             self.remote_run_epoch(epoch_size, epoch)
             addition += 1
+        elapsed_time_train = datetime.datetime.now() - start_time_train
+        train_time_ms = int(elapsed_time_train.total_seconds() * 1000)
         logging.info('Printing client data')
         print(self.client_data)
 
-        # logging.info(f'Saving data')
-        # self.save_epoch_data()
         logging.info(f'Federator is stopping')
-        self.save_fid_data()
+        self.plot_score_data()
+
+        throughput = round(train_time_ms / epoch_to_run, 2)
+        print('Throughput: {} ms'.format(throughput))

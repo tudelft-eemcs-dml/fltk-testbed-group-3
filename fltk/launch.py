@@ -1,10 +1,6 @@
 import os
-import sys
 import torch.distributed.rpc as rpc
 import logging
-
-import yaml
-import argparse
 
 import torch.multiprocessing as mp
 from fltk.federator import Federator
@@ -17,7 +13,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 def run_ps(rpc_ids_triple, args):
     print(f'Starting the federator...')
-    fed = FederatorMDGAN(rpc_ids_triple, config=args)
+    fed = FederatorFeGAN(rpc_ids_triple, config=args)
     fed.run()
 
 

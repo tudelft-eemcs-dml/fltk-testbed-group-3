@@ -32,6 +32,7 @@ class FederatorFeGAN(Federator):
         self.latent_dim = 10
         self.batch_size = 100
         self.fids = []
+        self.inceptions = []
 
     def gather_class_distributions(self):
         responses = []
@@ -120,9 +121,10 @@ class FederatorFeGAN(Federator):
         mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, fic_model)
         mu_test, sigma_test = calculate_activation_statistics(test_imgs[:self.batch_size], fic_model)
         fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
-        print("FL-round {} FID Score: {}".format(fl_round, fid))
+        print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
         self.fids.append(fid)
+        self.inceptions.append(mu_gen)
 
     def checkpoint(self, fl_round):
         # For fault tolerance
@@ -133,15 +135,16 @@ class FederatorFeGAN(Federator):
                  'fl_round': fl_round}
         torch.save(state, file_output + "/checkpoint")
 
-    def save_fid_data(self):
+    def plot_score_data(self):
         file_output = f'./{self.config.output_location}'
         self.ensure_path_exists(file_output)
 
-        plt.plot(range(self.config.epochs), self.fids)
+        plt.plot(range(self.config.epochs), self.fids, 'b')
+        # plt.plot(range(self.config.epochs), self.inceptions, 'r')
         plt.xlabel('Epochs')
-        plt.ylabel('FID')
+        plt.ylabel('Score')
 
-        filename = f'{file_output}/fid_{self.config.epochs}_epochs_fe_gan.png'
+        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan.png'
         logging.info(f'Saving data at {filename}')
 
         plt.savefig(filename)
@@ -190,12 +193,19 @@ class FederatorFeGAN(Federator):
         addition = 0
         epoch_to_run = self.config.epochs
         epoch_size = self.config.epochs_per_cycle
+        start_time_train = datetime.datetime.now()
         for epoch in range(epoch_to_run):
             print(f'Running epoch {epoch}')
             self.remote_run_epoch(epoch_size, epoch)
             addition += 1
+
+        elapsed_time_train = datetime.datetime.now() - start_time_train
+        train_time_ms = int(elapsed_time_train.total_seconds() * 1000)
         logging.info('Printing client data')
         print(self.client_data)
 
         logging.info(f'Federator is stopping')
-        self.save_fid_data()
+        self.plot_score_data()
+
+        throughput = round(train_time_ms / epoch_to_run, 2)
+        print('Throughput: {} ms'.format(throughput))
