@@ -58,13 +58,13 @@ class ClientFeGAN(Client):
         return sorted((zip(unique, counts)))
 
     def J_generator(self, disc_out):
-        return (1 / self.batch_size) * sum(torch.log(1 - disc_out))
+        return (1 / self.batch_size) * torch.sum(torch.log(1 - disc_out))
 
     def A_hat(self, disc_out):
-        return (1 / self.batch_size) * sum(torch.log(disc_out))
+        return (1 / self.batch_size) * torch.sum(torch.log(disc_out))
 
     def B_hat(self, disc_out):
-        return (1 / self.batch_size) * sum(torch.log(1 - disc_out))
+        return (1 / self.batch_size) * torch.sum(torch.log(1 - disc_out))
 
     def train_fe(self, epoch, net):
         generator, discriminator = net
