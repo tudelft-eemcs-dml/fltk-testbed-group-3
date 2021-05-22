@@ -45,6 +45,7 @@ class ClientFeGAN(Client):
     dataset = None
     epoch_results: List[EpochData] = []
     epoch_counter = 0
+    epsilon = 0.00000001
 
     def __init__(self, id, log_rref, rank, world_size, config=None):
         super().__init__(id, log_rref, rank, world_size, config)
@@ -58,13 +59,13 @@ class ClientFeGAN(Client):
         return sorted((zip(unique, counts)))
 
     def J_generator(self, disc_out):
-        return (1 / self.batch_size) * torch.sum(torch.log(1 - disc_out))
+        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - disc_out, min=self.epsilon)))
 
     def A_hat(self, disc_out):
-        return (1 / self.batch_size) * torch.sum(torch.log(disc_out))
+        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(disc_out, min=self.epsilon)))
 
     def B_hat(self, disc_out):
-        return (1 / self.batch_size) * torch.sum(torch.log(1 - disc_out))
+        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - disc_out, min=self.epsilon)))
 
     def train_fe(self, epoch, net):
         generator, discriminator = net
