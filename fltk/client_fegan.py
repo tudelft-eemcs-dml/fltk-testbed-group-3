@@ -58,6 +58,19 @@ class ClientFeGAN(Client):
         unique, counts = np.unique(labels, return_counts=True)
         return sorted((zip(unique, counts)))
 
+    def init_dataloader(self, ):
+        self.args.distributed = True
+        self.args.rank = self.rank
+        self.args.world_size = self.world_size
+        self.dataset = self.args.DistDatasets[self.args.dataset_name](self.args)
+        self.inputs, lbl = self.dataset.load_train_dataset()
+        del lbl
+        self.finished_init = True
+
+        self.batch_size = 100
+
+        logging.info('Done with init')
+
     def J_generator(self, disc_out):
         return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - disc_out, min=self.epsilon)))
 
@@ -69,6 +82,8 @@ class ClientFeGAN(Client):
 
     def train_fe(self, epoch, net):
         generator, discriminator = net
+        generator.zero_grad()
+        discriminator.zero_grad()
         optimizer_generator = torch.optim.Adam(generator.parameters(),
                                                lr=0.0002,
                                                betas=(0.5, 0.999))
@@ -79,8 +94,7 @@ class ClientFeGAN(Client):
         if self.args.distributed:
             self.dataset.train_sampler.set_epoch(epoch)
 
-        inputs, _ = self.dataset.load_train_dataset()
-        inputs = torch.from_numpy(inputs[[random.randrange(inputs.shape[0]) for _ in range(self.batch_size)]])
+        inputs = torch.from_numpy(self.inputs[[random.randrange(self.inputs.shape[0]) for _ in range(self.batch_size)]]).detach()
 
         optimizer_generator.zero_grad()
         optimizer_discriminator.zero_grad()
@@ -118,6 +132,6 @@ class ClientFeGAN(Client):
         train_time_ms = int(elapsed_time_train.total_seconds() * 1000)
 
         data = FeGANEpochData(self.epoch_counter, train_time_ms, 0, (gen, disc), client_id=self.id)
-        self.epoch_results.append(data)
+        # self.epoch_results.append(data)
 
         return data

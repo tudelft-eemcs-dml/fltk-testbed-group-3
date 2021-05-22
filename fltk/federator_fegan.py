@@ -33,6 +33,7 @@ class FederatorFeGAN(Federator):
         self.batch_size = 100
         self.fids = []
         self.inceptions = []
+        self.fic_model = InceptionV3()
 
     def gather_class_distributions(self):
         responses = []
@@ -63,10 +64,13 @@ class FederatorFeGAN(Federator):
     def init_dataloader(self, ):
         self.config.distributed = True
         self.dataset = self.config.DistDatasets[self.config.dataset_name](self.config)
+        self.test_imgs, lbls = self.dataset.load_test_dataset()
         self.finished_init = True
 
         self.generator.apply(weights_init_normal)
         self.discriminator.apply(weights_init_normal)
+
+        del lbls
         logging.info('Done with init')
 
     # TODO: cleanup
@@ -112,19 +116,18 @@ class FederatorFeGAN(Federator):
                 done = True
 
     def test(self, fl_round):
-        file_output = f'./{self.config.output_location}'
-        self.ensure_path_exists(file_output)
-        fic_model = InceptionV3()
-        test_imgs = self.dataset.load_test_dataset()[0]
-        fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-        gen_imgs = self.generator(fid_z)
-        mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, fic_model)
-        mu_test, sigma_test = calculate_activation_statistics(test_imgs[:self.batch_size], fic_model)
-        fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
-        print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
+        with torch.no_grad():
+            file_output = f'./{self.config.output_location}'
+            self.ensure_path_exists(file_output)
+            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            gen_imgs = self.generator(fid_z.detach())
+            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs.detach(), self.fic_model)
+            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(self.test_imgs[:self.batch_size]).detach(), self.fic_model)
+            fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
+            print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
-        self.fids.append(fid)
-        self.inceptions.append(mu_gen)
+            self.fids.append(fid)
+            # self.inceptions.append(mu_gen)
 
     def checkpoint(self, fl_round):
         # For fault tolerance
@@ -165,8 +168,8 @@ class FederatorFeGAN(Federator):
             self.client_data[epoch_data.client_id].append(epoch_data)
             logging.info(f'{res[0]} had a epoch data of {epoch_data}')
 
-            client_generators.append(epoch_data.net[0])
-            client_discriminators.append(epoch_data.net[1])
+            # client_generators.append(epoch_data.net[0])
+            # client_discriminators.append(epoch_data.net[1])
 
         selected_entropies = [self.entropies[idx] for idx in range(len(self.clients))
                               if self.clients[idx] in selected_clients]
