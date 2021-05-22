@@ -28,6 +28,7 @@ class ClientMDGAN(Client):
     dataset = None
     epoch_results: List[EpochData] = []
     epoch_counter = 0
+    epsilon = 0.00000001
 
     def __init__(self, id, log_rref, rank, world_size, config=None, batch_size=20):
         super().__init__(id, log_rref, rank, world_size, config)
@@ -98,10 +99,10 @@ class ClientMDGAN(Client):
             self.save_model(epoch, self.args.get_epoch_save_end_suffix())
 
     def A_hat(self, Xr):
-        return (1 / self.batch_size) * sum(torch.log(self.discriminator(Xr)))
+        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(self.discriminator(Xr), min=self.epsilon)))
 
     def B_hat(self, Xg):
-        return (1 / self.batch_size) * sum(torch.log(1 - self.discriminator(Xg)))
+        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - self.discriminator(Xg), min=self.epsilon)))
 
     def calculate_error(self, Xg):
         b_hat = self.B_hat(Xg)

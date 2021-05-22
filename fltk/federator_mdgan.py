@@ -38,6 +38,7 @@ class FederatorMDGAN(Federator):
         self.fids = []
         self.discriminator = Discriminator(32)
         self.inceptions = []
+        self.epsilon = 0.00000001
 
     def introduce_clients(self):
         ref_clients = []
@@ -104,7 +105,8 @@ class FederatorMDGAN(Federator):
         return Variable(torch.FloatTensor(w_grads))
 
     def J_generator(self, Zg):
-        return (1 / self.batch_size) * sum(torch.log(1 - self.discriminator(self.generator(Zg))))
+        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - self.discriminator(self.generator(Zg)),
+                                                           min=self.epsilon)))
 
     def remote_run_epoch(self, epochs, fl_round=0):
         responses = []
