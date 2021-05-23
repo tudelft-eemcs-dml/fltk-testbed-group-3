@@ -119,10 +119,10 @@ class FederatorFeGAN(Federator):
         with torch.no_grad():
             file_output = f'./{self.config.output_location}'
             self.ensure_path_exists(file_output)
-            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (1000, self.latent_dim))))
             gen_imgs = self.generator(fid_z.detach())
-            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs.detach(), self.fic_model)
-            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(self.test_imgs[:self.batch_size]).detach(), self.fic_model)
+            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, self.fic_model)
+            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(self.test_imgs[:1000]), self.fic_model)
             fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
             print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
@@ -165,11 +165,11 @@ class FederatorFeGAN(Federator):
         self.epoch_counter += epochs
         for res in responses:
             epoch_data = res[1].wait()
-            self.client_data[epoch_data.client_id].append(epoch_data)
+            # self.client_data[epoch_data.client_id].append(epoch_data)
             logging.info(f'{res[0]} had a epoch data of {epoch_data}')
 
-            # client_generators.append(epoch_data.net[0])
-            # client_discriminators.append(epoch_data.net[1])
+            client_generators.append(epoch_data.net[0])
+            client_discriminators.append(epoch_data.net[1])
 
         selected_entropies = [self.entropies[idx] for idx in range(len(self.clients))
                               if self.clients[idx] in selected_clients]

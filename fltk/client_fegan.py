@@ -94,7 +94,7 @@ class ClientFeGAN(Client):
         if self.args.distributed:
             self.dataset.train_sampler.set_epoch(epoch)
 
-        inputs = torch.from_numpy(self.inputs[[random.randrange(self.inputs.shape[0]) for _ in range(self.batch_size)]]).detach()
+        inputs = torch.from_numpy(self.inputs[[random.randrange(self.inputs.shape[0]) for _ in range(self.batch_size)]])
 
         optimizer_generator.zero_grad()
         optimizer_discriminator.zero_grad()
@@ -104,6 +104,7 @@ class ClientFeGAN(Client):
         d_generator = discriminator(generated_imgs)
         generator_loss = self.J_generator(d_generator)
         generator_loss.require_grad = True
+        generator_loss.backward(retain_graph=True)
         generator_loss.backward(retain_graph=True)
 
         fake_loss = self.B_hat(d_generator)
