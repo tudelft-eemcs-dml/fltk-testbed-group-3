@@ -99,18 +99,18 @@ class FederatorMDGAN(Federator):
 
         for param in self.generator.parameters():
             for w in torch.flatten(param):
-                w_grad = 0.0
+                w_grad = torch.FloatTensor([0.0])
                 for en in Fs:
                     for x in Xg:
-                        w_grad += en * 1 # change 1 to dx_i / d_w_j
+                        # change 1 to dx_i / dw_j:
+                        # RuntimeError: grad can be implicitly created only for scalar outputs
+                        w_grad += en * torch.autograd.grad(outputs=torch.Tensor().new_tensor(data=x, requires_grad=True),
+                                                           inputs=torch.Tensor().new_tensor(data=[w], requires_grad=True),
+                                                           create_graph=True, retain_graph=True, allow_unused=True)[0]
 
                 w_grad /= (self.batch_size * len(self.clients))
                 w_grads.append(w_grad)
         return Variable(torch.FloatTensor(w_grads))
-
-    def J_generator(self, Zg):
-        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - self.discriminator(self.generator(Zg)),
-                                                           min=self.epsilon)))
 
     def remote_run_epoch(self, epochs, fl_round=0):
         responses = []
@@ -149,11 +149,11 @@ class FederatorMDGAN(Federator):
 
             epoch_data.F_n.require_grad = True
 
-            client_errors.append(epoch_data.F_n)
+            client_errors.append(epoch_data.F_n[0])
 
         # TODO: using wrong loss with server discriminator, batch size divided to fit memory!!!
         # client_errors = torch.stack(client_errors)
-        g_loss = self.w_grad(client_errors)
+        g_loss = self.w_grad(client_errors, X_g)
 
         del X_g
         del X_d
