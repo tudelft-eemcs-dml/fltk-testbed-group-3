@@ -95,14 +95,18 @@ class FederatorMDGAN(Federator):
             # self.inceptions.append(mu_gen)
 
     def w_grad(self, Fs, Xg):
-        w_grad = 0.0
+        w_grads = []
 
-        for en in Fs:
-            for x in Xg:
-                w_grad += en * 1 # change 1 to dx_i / d_w_j
+        for param in self.generator.parameters():
+            for w in torch.flatten(param):
+                w_grad = 0.0
+                for en in Fs:
+                    for x in Xg:
+                        w_grad += en * 1 # change 1 to dx_i / d_w_j
 
-        w_grad /= (self.batch_size * len(self.clients))
-        return w_grad
+                w_grad /= (self.batch_size * len(self.clients))
+                w_grads.append(w_grad)
+        return Variable(torch.FloatTensor(w_grads))
 
     def J_generator(self, Zg):
         return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - self.discriminator(self.generator(Zg)),
