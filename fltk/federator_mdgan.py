@@ -80,18 +80,19 @@ class FederatorMDGAN(Federator):
             _remote_method_async(ClientMDGAN.set_batch_size, client.ref, batch_size=self.batch_size)
 
     def test_generator(self, fl_round):
-        eval_samples = 50
-        fic_model = InceptionV3()
-        test_imgs = self.testset[0]
-        fid_z = Variable(torch.Tensor(np.random.normal(0, 1, (eval_samples, self.latent_dim))))
-        gen_imgs = self.generator(fid_z)
-        mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, fic_model)
-        mu_test, sigma_test = calculate_activation_statistics(test_imgs[:eval_samples], fic_model)
-        fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
-        print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
+        with torch.no_grad():
+            eval_samples = 3000
+            fic_model = InceptionV3()
+            test_imgs = self.testset[0]
+            fid_z = Variable(torch.Tensor(np.random.normal(0, 1, (eval_samples, self.latent_dim))))
+            gen_imgs = self.generator(fid_z.detach())
+            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, fic_model)
+            mu_test, sigma_test = calculate_activation_statistics(test_imgs[:eval_samples], fic_model)
+            fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
+            print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
-        self.fids.append(fid)
-        self.inceptions.append(mu_gen)
+            self.fids.append(fid)
+            # self.inceptions.append(mu_gen)
 
     def w_grad(self, Fs):
         w_grads = []
@@ -141,7 +142,7 @@ class FederatorMDGAN(Federator):
         for res in responses:
             epoch_data = res[1].wait()
             self.client_data[epoch_data.client_id].append(epoch_data)
-            logging.info(f'{res[0]} had a epoch data of {epoch_data}')
+            # logging.info(f'{res[0]} had a epoch data of {epoch_data}')
 
             epoch_data.F_n.require_grad = True
 
@@ -149,12 +150,12 @@ class FederatorMDGAN(Federator):
 
         # TODO: using wrong loss with server discriminator, batch size divided to fit memory!!!
         # client_errors = torch.stack(client_errors)
-        # g_loss = self.w_grad(client_errors)
+        g_loss = self.w_grad(client_errors)
 
         del X_g
         del X_d
-        noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size // 5, self.latent_dim))))
-        g_loss = self.J_generator(noise)
+        # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+        # g_loss = self.J_generator(noise)
 
         # g_loss.backward(self.generator.parameters())
         g_loss.backward(self.generator.parameters())
@@ -169,7 +170,7 @@ class FederatorMDGAN(Federator):
 
         plt.plot(range(self.config.epochs), self.fids, 'b')
         # plt.plot(range(self.config.epochs), self.inceptions, 'r')
-        plt.xlabel('Epochs')
+        plt.xlabel('FID')
         plt.ylabel('Score')
 
         filename = f'{file_output}/fid_{self.config.epochs}_epochs_md_gan.png'
@@ -202,7 +203,7 @@ class FederatorMDGAN(Federator):
         elapsed_time_train = datetime.datetime.now() - start_time_train
         train_time_ms = int(elapsed_time_train.total_seconds() * 1000)
         logging.info('Printing client data')
-        print(self.client_data)
+        # print(self.client_data)
 
         logging.info(f'Federator is stopping')
         self.plot_score_data()

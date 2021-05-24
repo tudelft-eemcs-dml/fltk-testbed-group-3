@@ -51,7 +51,7 @@ class ClientFeGAN(Client):
         super().__init__(id, log_rref, rank, world_size, config)
         logging.info(f'Welcome to FE client {id}')
         self.latent_dim = 10
-        self.batch_size = 100
+        self.batch_size = 3000
 
     def return_distribution(self):
         labels = self.dataset.load_train_dataset()[1]

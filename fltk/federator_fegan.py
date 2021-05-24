@@ -30,7 +30,7 @@ class FederatorFeGAN(Federator):
         self.discriminator = Discriminator()
         self.discriminator.apply(weights_init_normal)
         self.latent_dim = 10
-        self.batch_size = 100
+        self.batch_size = 3000
         self.fids = []
         self.inceptions = []
         self.fic_model = InceptionV3()
@@ -119,10 +119,10 @@ class FederatorFeGAN(Federator):
         with torch.no_grad():
             file_output = f'./{self.config.output_location}'
             self.ensure_path_exists(file_output)
-            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (1000, self.latent_dim))))
+            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.test_imgs.shape[0], self.latent_dim))))
             gen_imgs = self.generator(fid_z.detach())
             mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, self.fic_model)
-            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(self.test_imgs[:1000]), self.fic_model)
+            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(self.test_imgs), self.fic_model)
             fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
             print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
@@ -139,13 +139,14 @@ class FederatorFeGAN(Federator):
         torch.save(state, file_output + "/checkpoint")
 
     def plot_score_data(self):
+        print(self.fids)
         file_output = f'./{self.config.output_location}'
         self.ensure_path_exists(file_output)
 
-        plt.plot(range(self.config.epochs), self.fids, 'b')
+        plt.plot(range(0, self.config.epochs, 25), self.fids, 'b')
         # plt.plot(range(self.config.epochs), self.inceptions, 'r')
         plt.xlabel('Epochs')
-        plt.ylabel('Score')
+        plt.ylabel('FID')
 
         filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan.png'
         logging.info(f'Saving data at {filename}')
@@ -176,7 +177,8 @@ class FederatorFeGAN(Federator):
         self.generator, self.discriminator = kl_weighting(self.generator, client_generators, selected_entropies), \
                                              kl_weighting(self.discriminator, client_discriminators, selected_entropies)
 
-        self.test(epoch)
+        if epoch % 25 == 0:
+            self.test(epoch)
 
     def run(self):
         """

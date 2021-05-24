@@ -4,6 +4,7 @@ from typing import List
 from torch.distributed import rpc
 import logging
 import numpy as np
+from scipy.integrate import odeint
 
 from fltk.client import Client
 from fltk.util.weight_init import *
@@ -88,7 +89,8 @@ class ClientMDGAN(Client):
         # not sure about loss function - shall we use A_hat / B_hat?
         # fake_loss = self.adversarial_loss(self.discriminator(Xd.detach()), fake)
         # real_loss = self.adversarial_loss(outputs, labels)
-        fake_loss = self.B_hat(Xd)
+        disc_out = torch.clamp(1 - self.discriminator(Xd), min=self.epsilon)
+        fake_loss = self.B_hat(disc_out)
         real_loss = self.A_hat(inputs)
 
         d_loss = (real_loss + fake_loss)
@@ -101,14 +103,13 @@ class ClientMDGAN(Client):
     def A_hat(self, Xr):
         return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(self.discriminator(Xr), min=self.epsilon)))
 
-    def B_hat(self, Xg):
-        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - self.discriminator(Xg), min=self.epsilon)))
+    def B_hat(self, disc_out):
+        return (1 / self.batch_size) * torch.sum(torch.log(disc_out))
 
     def calculate_error(self, Xg):
-        b_hat = self.B_hat(Xg)
-        b_hat.backward(retain_graph=True)
-        print(type(Xg.grad))
-        return Xg.grad
+        disc_out = torch.clamp(1 - self.discriminator(Xg), min=self.epsilon)
+        b_hat = self.B_hat(disc_out)
+        return torch.autograd.grad(outputs=b_hat, inputs=disc_out)[0]
 
     def get_new_discriminator(self, discriminator):
         self.discriminator = discriminator
@@ -130,6 +131,7 @@ class ClientMDGAN(Client):
             self.epoch_counter += 1
 
         error = self.calculate_error(Xg)
+        print('Error shape: ', error.shape)
         elapsed_time_train = datetime.datetime.now() - start_time_train
         train_time_ms = int(elapsed_time_train.total_seconds()*1000)
 
@@ -138,6 +140,8 @@ class ClientMDGAN(Client):
         test_time_ms = int(elapsed_time_test.total_seconds()*1000)
 
         data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, error, client_id=self.id)
-        self.epoch_results.append(data)
+        # self.epoch_results.append(data)
+
+        self.swap_discriminator(current_epoch)
 
         return data
