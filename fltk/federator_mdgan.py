@@ -173,8 +173,8 @@ class FederatorMDGAN(Federator):
 
         plt.plot(range(self.config.epochs), self.fids, 'b')
         # plt.plot(range(self.config.epochs), self.inceptions, 'r')
-        plt.xlabel('FID')
-        plt.ylabel('Score')
+        plt.xlabel('Federator runs')
+        plt.ylabel('FID')
 
         filename = f'{file_output}/fid_{self.config.epochs}_epochs_md_gan.png'
         logging.info(f'Saving data at {filename}')

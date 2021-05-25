@@ -145,7 +145,7 @@ class FederatorFeGAN(Federator):
 
         plt.plot(range(0, self.config.epochs, 25), self.fids, 'b')
         # plt.plot(range(self.config.epochs), self.inceptions, 'r')
-        plt.xlabel('Epochs')
+        plt.xlabel('Federator runs')
         plt.ylabel('FID')
 
         filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan.png'

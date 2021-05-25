@@ -8,6 +8,7 @@ import logging
 import numpy as np
 
 from fltk.client import Client
+from fltk.util.wassdistance import SinkhornDistance
 from fltk.util.weight_init import *
 
 from fltk.util.results import EpochData, FeGANEpochData
@@ -52,6 +53,7 @@ class ClientFeGAN(Client):
         logging.info(f'Welcome to FE client {id}')
         self.latent_dim = 10
         self.batch_size = 3000
+        self.sinkhorn = SinkhornDistance(eps=0.1, max_iter=100)
 
     def return_distribution(self):
         labels = self.dataset.load_train_dataset()[1]
@@ -109,6 +111,8 @@ class ClientFeGAN(Client):
 
         fake_loss = self.B_hat(d_generator)
         real_loss = self.A_hat(discriminator(inputs))
+        # fake_loss, _, _ = self.sinkhorn(d_generator, torch.zeros(self.batch_size, 1))
+        # real_loss, _, _ = self.sinkhorn(discriminator(inputs), torch.ones(self.batch_size))
         discriminator_loss = 0.5 * (real_loss + fake_loss)
         discriminator_loss.require_grad = True
         discriminator_loss.backward()
