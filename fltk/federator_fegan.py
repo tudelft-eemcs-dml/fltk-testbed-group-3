@@ -148,7 +148,7 @@ class FederatorFeGAN(Federator):
         plt.xlabel('Federator runs')
         plt.ylabel('FID')
 
-        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan_wd.png'
+        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan_wd2.png'
         logging.info(f'Saving data at {filename}')
 
         plt.savefig(filename)

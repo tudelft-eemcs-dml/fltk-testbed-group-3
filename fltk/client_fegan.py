@@ -2,6 +2,7 @@ import datetime
 import random
 from typing import List
 
+from ot import wasserstein_1d
 from torch.distributed import rpc
 from torch.autograd import Variable
 import logging
@@ -70,8 +71,6 @@ class ClientFeGAN(Client):
         del lbl
         self.finished_init = True
 
-        self.batch_size = 100
-
         logging.info('Done with init')
 
     def J_generator(self, disc_out):
@@ -108,16 +107,16 @@ class ClientFeGAN(Client):
         generator_loss = self.J_generator(d_generator)
         generator_loss.require_grad = True
         generator_loss.backward(retain_graph=True)
-        generator_loss.backward(retain_graph=True)
 
-        # fake_loss = self.B_hat(d_generator)
-        # real_loss = self.A_hat(discriminator(inputs))
-        fake_loss, _, _ = self.sinkhorn(d_generator, torch.zeros(self.batch_size, 1))
-        real_loss, _, _ = self.sinkhorn(discriminator(inputs), torch.zeros(self.batch_size, 1))
-        # fake_loss = wasserstein_1d(torch.flatten(d_generator), torch.zeros(self.batch_size))
-        # real_loss = wasserstein_1d(torch.flatten(d_generator), torch.zeros(self.batch_size))
-        discriminator_loss = 0.5 * (real_loss + fake_loss)
-        discriminator_loss.require_grad = True
+        fake_loss = self.B_hat(d_generator)
+        real_loss = self.A_hat(discriminator(inputs))
+        # fake_loss, _, _ = self.sinkhorn(d_generator, torch.zeros(self.batch_size, 1))
+        # real_loss, _, _ = self.sinkhorn(discriminator(inputs), torch.ones(self.batch_size, 1))
+        # fake_loss = wasserstein_1d(torch.flatten(d_generator).detach().numpy(),
+        #                            torch.zeros(self.batch_size).detach().numpy())
+        # real_loss = wasserstein_1d(torch.flatten(discriminator(inputs)).detach().numpy(),
+        #                            torch.ones(self.batch_size).detach().numpy())
+        discriminator_loss = torch.tensor([real_loss + fake_loss], requires_grad=True)
         discriminator_loss.backward()
 
         optimizer_generator.step()
