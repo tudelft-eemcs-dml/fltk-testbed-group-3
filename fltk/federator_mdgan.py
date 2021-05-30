@@ -1,3 +1,4 @@
+import copy
 import math
 import random
 
@@ -13,6 +14,8 @@ from fltk.nets.ls_gan import *
 from fltk.util.weight_init import *
 import logging
 import matplotlib.pyplot as plt
+from torch.distributed.optim import DistributedOptimizer
+from torch import optim
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -26,9 +29,11 @@ class FederatorMDGAN(Federator):
 
         self.generator = Generator(32)
         self.generator.apply(weights_init_normal)
-        self.optimizer = torch.optim.Adam(self.generator.parameters(),
-                                          lr=0.0002,
-                                          betas=(0.5, 0.999))
+        # self.optimizer = torch.optim.Adam(self.generator.parameters(),
+        #                                   lr=0.0002,
+        #                                   betas=(0.5, 0.999))
+        self.optimizer = torch.distributed.optim.DistributedOptimizer(
+            optim.Adam,  self.param_rrefs(self.generator), lr=2e-4, betas=(0.5, 0.9))
         self.latent_dim = 10
         # K <= N
         self.k = len(client_id_triple) - 1
@@ -39,6 +44,7 @@ class FederatorMDGAN(Federator):
         self.discriminator = Discriminator(32)
         self.inceptions = []
         self.epsilon = 0.00000001
+        self.fic_model = InceptionV3()
 
     def introduce_clients(self):
         ref_clients = []
@@ -81,42 +87,51 @@ class FederatorMDGAN(Federator):
 
     def test_generator(self, fl_round):
         with torch.no_grad():
-            eval_samples = 3000
-            fic_model = InceptionV3()
+            file_output = f'./{self.config.output_location}'
+            self.ensure_path_exists(file_output)
             test_imgs = self.testset[0]
-            fid_z = Variable(torch.Tensor(np.random.normal(0, 1, (eval_samples, self.latent_dim))))
+            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (test_imgs.shape[0], self.latent_dim))))
             gen_imgs = self.generator(fid_z.detach())
-            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, fic_model)
-            mu_test, sigma_test = calculate_activation_statistics(test_imgs[:eval_samples], fic_model)
+            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, self.fic_model)
+            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(test_imgs), self.fic_model)
             fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
             print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
             self.fids.append(fid)
             # self.inceptions.append(mu_gen)
 
-    def w_grad(self, Fs, Xg):
-        w_grads = []
+    # def w_grad(self, Fs, Xg):
+    #     w_grads = []
+    #
+    #     for param in self.generator.parameters():
+    #         for w in torch.flatten(param):
+    #             w_grad = torch.FloatTensor([0.0])
+    #             for en in Fs:
+    #                 for x in Xg:
+    #                     # change 1 to dx_i / dw_j:
+    #                     # RuntimeError: grad can be implicitly created only for scalar outputs
+    #                     w_grad += en * torch.autograd.grad(outputs=torch.Tensor().new_tensor(data=x, requires_grad=True),
+    #                                                        inputs=torch.Tensor().new_tensor(data=[w], requires_grad=True),
+    #                                                        create_graph=True, retain_graph=True, allow_unused=True)[0]
+    #
+    #             w_grad /= (self.batch_size * len(self.clients))
+    #             w_grads.append(w_grad)
+    #     return Variable(torch.FloatTensor(w_grads))
 
-        for param in self.generator.parameters():
-            for w in torch.flatten(param):
-                w_grad = torch.FloatTensor([0.0])
-                for en in Fs:
-                    for x in Xg:
-                        # change 1 to dx_i / dw_j:
-                        # RuntimeError: grad can be implicitly created only for scalar outputs
-                        w_grad += en * torch.autograd.grad(outputs=torch.Tensor().new_tensor(data=x, requires_grad=True),
-                                                           inputs=torch.Tensor().new_tensor(data=[w], requires_grad=True),
-                                                           create_graph=True, retain_graph=True, allow_unused=True)[0]
+    def param_rrefs(self, module):
+        """grabs remote references to the parameters of a module"""
+        param_rrefs = []
+        for param in module.parameters():
+            param_rrefs.append(rpc.RRef(param))
+        print(param_rrefs)
+        return param_rrefs
 
-                w_grad /= (self.batch_size * len(self.clients))
-                w_grads.append(w_grad)
-        return Variable(torch.FloatTensor(w_grads))
+    def J_generator(self, noise, discriminator):
+        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - discriminator(noise), min=self.epsilon)))
 
     def remote_run_epoch(self, epochs, fl_round=0):
         responses = []
-        client_errors = []
-
-        self.optimizer.zero_grad()
+        client_rrefs = []
 
         # broadcast generated datasets to clients and get trained discriminators back
         selected_clients = self.select_clients(self.config.clients_per_round)
@@ -125,10 +140,10 @@ class FederatorMDGAN(Federator):
         X_d = []
         for i in range(self.k):
             noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-            X_g.append(self.generator(noise))
+            X_g.append(self.generator(noise.detach()))
 
             noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-            X_d.append(self.generator(noise))
+            X_d.append(self.generator(noise.detach()))
 
         samples_d = [random.randrange(self.k) for _ in range(len(selected_clients))]
         samples_g = [random.randrange(self.k) for _ in range(len(selected_clients))]
@@ -140,38 +155,51 @@ class FederatorMDGAN(Federator):
 
             responses.append((client, _remote_method_async(ClientMDGAN.run_epochs, client.ref,
                                                            epochs, fl_round, (X_d_i, X_g_i))))
+            client_rrefs.append(client.ref)
 
         self.epoch_counter += epochs
         for res in responses:
             epoch_data = res[1].wait()
-            self.client_data[epoch_data.client_id].append(epoch_data)
-            # logging.info(f'{res[0]} had a epoch data of {epoch_data}')
-
-            epoch_data.F_n.require_grad = True
-
-            client_errors.append(epoch_data.F_n[0])
-
-        # TODO: using wrong loss with server discriminator, batch size divided to fit memory!!!
-        # client_errors = torch.stack(client_errors)
-        g_loss = self.w_grad(client_errors, X_g)
+            # self.client_data[epoch_data.client_id].append(epoch_data)
 
         del X_g
         del X_d
-        # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-        # g_loss = self.J_generator(noise)
+        # TODO: using wrong loss with server discriminator, batch size divided to fit memory!!!
+        # client_errors = torch.stack(client_errors)
+        # g_loss = self.w_grad(client_errors, X_g)
+        # discriminator = Discriminator()
+        # discriminator.load_state_dict(copy.deepcopy(average_nn_parameters(client_discs)), strict=True)
+        # discriminator.eval()
 
-        # g_loss.backward(self.generator.parameters())
-        g_loss.backward(self.generator.parameters())
-        self.optimizer.step()
+        with torch.distributed.autograd.context() as G_context:
+            loss_g_list = []
+            for client_rref in client_rrefs:
+                print("G step update")
+                loss_g_list.append(client_rref.rpc_async().loss_generator())
+            loss_accumulated = loss_g_list[0].wait()
+            for j in range(1, len(loss_g_list)):
+                loss_accumulated += loss_g_list[j].wait()
+
+            torch.distributed.autograd.backward(G_context, [loss_accumulated])
+            self.optimizer.step(G_context)
+
+        # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+        # g_loss = self.J_generator(noise, discriminator)
+        # g_loss.backward()
+        #
+        # # g_loss.backward(self.generator.parameters())
+        # # g_loss.backward(self.generator.parameters())
+        # self.optimizer.step()
 
         logging.info('Gradient is updated')
-        self.test_generator(fl_round)
+        if fl_round % 25 == 0:
+            self.test_generator(fl_round)
 
     def plot_score_data(self):
         file_output = f'./{self.config.output_location}'
         self.ensure_path_exists(file_output)
 
-        plt.plot(range(self.config.epochs), self.fids, 'b')
+        plt.plot(range(0, self.config.epochs, 25), self.fids, 'b')
         # plt.plot(range(self.config.epochs), self.inceptions, 'r')
         plt.xlabel('Federator runs')
         plt.ylabel('FID')

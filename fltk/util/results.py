@@ -27,13 +27,13 @@ class GANEpochData:
     epoch_id: int
     duration_train: int
     duration_test: int
-    F_n: torch.Tensor
+    disc: Any
     client_id: str = None
 
     def to_csv_line(self):
         delimeter = ','
         values = self.__dict__.values()
-        values = [str(x) for x in values if str(x) != 'F_n']
+        values = [str(x) for x in values if str(x) != 'disc']
         return delimeter.join(values)
 
 

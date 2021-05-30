@@ -1,7 +1,7 @@
 ---
 # Experiment configuration
 total_epochs: 500
-epochs_per_cycle: 5
+epochs_per_cycle: 3
 wait_for_clients: true
 net: Cifar10CNN
 dataset: cifar10

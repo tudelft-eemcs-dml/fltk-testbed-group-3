@@ -1,6 +1,7 @@
 import datetime
 from typing import List
 
+from torch.autograd import Variable
 from torch.distributed import rpc
 import logging
 import numpy as np
@@ -46,7 +47,8 @@ class ClientMDGAN(Client):
         self.args.rank = self.rank
         self.args.world_size = self.world_size
         self.dataset = self.args.DistDatasets[self.args.dataset_name](self.args)
-        self.imgs = self.dataset.load_train_dataset()
+        self.imgs, self.lbls = self.dataset.load_train_dataset()
+        del self.lbls
         self.finished_init = True
 
         self.batch_size = self.args.DistDatasets[self.args.batch_size](self.args)
@@ -68,18 +70,12 @@ class ClientMDGAN(Client):
         :param epoch: Current epoch #
         :type epoch: int
         """
-        # save model
-        if self.args.should_save_model(epoch):
-            self.save_model(epoch, self.args.get_epoch_save_start_suffix())
 
         if self.args.distributed:
             self.dataset.train_sampler.set_epoch(epoch)
 
-        inputs = self.dataset.load_train_dataset()[0]
-        rnd_indices = np.random.choice(len(inputs), size=self.batch_size)
-        inputs, labels, fake = torch.from_numpy(inputs[rnd_indices]), \
-                               torch.ones(self.batch_size, dtype=torch.float), \
-                               torch.ones(self.batch_size, dtype=torch.float)
+        rnd_indices = np.random.choice(len(self.imgs), size=self.batch_size)
+        inputs = torch.from_numpy(self.imgs[rnd_indices])
 
         # zero the parameter gradients
         self.optimizer.zero_grad()
@@ -99,6 +95,9 @@ class ClientMDGAN(Client):
 
         if self.args.should_save_model(epoch):
             self.save_model(epoch, self.args.get_epoch_save_end_suffix())
+
+    def loss_generator(self):
+        return self.loss_g
 
     def A_hat(self, Xr):
         return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(self.discriminator(Xr), min=self.epsilon)))
@@ -122,6 +121,9 @@ class ClientMDGAN(Client):
                                         discriminator=self.discriminator)
         response.wait()
 
+    def J_generator(self, disc_out):
+        return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - disc_out, min=self.epsilon)))
+
     def run_epochs(self, num_epoch, current_epoch=1, Xs=None):
         start_time_train = datetime.datetime.now()
         Xd, Xg = Xs
@@ -130,8 +132,11 @@ class ClientMDGAN(Client):
             self.train_md(self.epoch_counter, Xd)
             self.epoch_counter += 1
 
-        error = self.calculate_error(Xg)
-        print('Error shape: ', error.shape)
+        # d_generator = self.discriminator(Xg)
+        # self.loss_g = self.J_generator(d_generator)
+
+        self.loss_g = torch.sum(self.calculate_error(Xg))
+        self.loss_g.requires_grad = True
         elapsed_time_train = datetime.datetime.now() - start_time_train
         train_time_ms = int(elapsed_time_train.total_seconds()*1000)
 
@@ -139,9 +144,10 @@ class ClientMDGAN(Client):
         elapsed_time_test = datetime.datetime.now() - start_time_test
         test_time_ms = int(elapsed_time_test.total_seconds()*1000)
 
-        data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, error, client_id=self.id)
+        # data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, error, client_id=self.id)
+        data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, None, client_id=self.id)
         # self.epoch_results.append(data)
 
-        self.swap_discriminator(current_epoch)
+        # self.swap_discriminator(current_epoch)
 
         return data
