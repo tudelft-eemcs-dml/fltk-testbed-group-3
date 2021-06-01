@@ -30,7 +30,7 @@ class FederatorFeGAN(Federator):
         self.discriminator = Discriminator()
         self.discriminator.apply(weights_init_normal)
         self.latent_dim = 10
-        self.batch_size = 3000
+        self.batch_size = 1000
         self.fids = []
         self.inceptions = []
         self.fic_model = InceptionV3()
@@ -39,7 +39,8 @@ class FederatorFeGAN(Federator):
         responses = []
         self.class_distributions = []
         for client in self.clients:
-            responses.append((client, _remote_method_async(ClientFeGAN.return_distribution, client.ref)))
+            responses.append((client, _remote_method_async(
+                ClientFeGAN.return_distribution, client.ref)))
         for res in responses:
             dist = res[1].wait()
             self.class_distributions.append(dist)
@@ -57,13 +58,15 @@ class FederatorFeGAN(Federator):
         # idea from code, not from official paper...
         all_samples = sum(num_per_class)
         rat_per_class = [float(n / all_samples) for n in num_per_class]
-        cleaned_distributions = [[c for _, c in dist] for dist in self.class_distributions]
+        cleaned_distributions = [[c for _, c in dist]
+                                 for dist in self.class_distributions]
         self.entropies = [stats.entropy(np.array(freq_l)/sum(freq_l), rat_per_class) * (sum(freq_l) / all_samples)
                           for freq_l in cleaned_distributions]
 
     def init_dataloader(self, ):
         self.config.distributed = True
-        self.dataset = self.config.DistDatasets[self.config.dataset_name](self.config)
+        self.dataset = self.config.DistDatasets[self.config.dataset_name](
+            self.config)
         self.test_imgs, lbls = self.dataset.load_test_dataset()
         self.finished_init = True
 
@@ -119,11 +122,15 @@ class FederatorFeGAN(Federator):
         with torch.no_grad():
             file_output = f'./{self.config.output_location}'
             self.ensure_path_exists(file_output)
-            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.test_imgs.shape[0], self.latent_dim))))
+            fid_z = Variable(torch.FloatTensor(np.random.normal(
+                0, 1, (self.test_imgs.shape[0], self.latent_dim))))
             gen_imgs = self.generator(fid_z.detach())
-            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, self.fic_model)
-            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(self.test_imgs), self.fic_model)
-            fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
+            mu_gen, sigma_gen = calculate_activation_statistics(
+                gen_imgs, self.fic_model)
+            mu_test, sigma_test = calculate_activation_statistics(
+                torch.from_numpy(self.test_imgs), self.fic_model)
+            fid = calculate_frechet_distance(
+                mu_gen, sigma_gen, mu_test, sigma_test)
             print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
             self.fids.append(fid)
@@ -175,7 +182,8 @@ class FederatorFeGAN(Federator):
         selected_entropies = [self.entropies[idx] for idx in range(len(self.clients))
                               if self.clients[idx] in selected_clients]
         self.generator, self.discriminator = kl_weighting(self.generator, client_generators, selected_entropies), \
-                                             kl_weighting(self.discriminator, client_discriminators, selected_entropies)
+            kl_weighting(self.discriminator,
+                         client_discriminators, selected_entropies)
 
         if epoch % 25 == 0:
             self.test(epoch)
@@ -200,9 +208,17 @@ class FederatorFeGAN(Federator):
         epoch_size = self.config.epochs_per_cycle
         start_time_train = datetime.datetime.now()
         for epoch in range(epoch_to_run):
+            epoch_start_time = datetime.datetime.now()
             print(f'Running epoch {epoch}')
             self.remote_run_epoch(epoch_size, epoch)
             addition += 1
+            self.plot_score_data()
+            elapsed_time_epoch = datetime.datetime.now() - epoch_start_time
+            self.epoch_times.append(elapsed_time_epoch.total_seconds())
+
+            self.plot_time_data(gan="fe")
+
+        self.plot_time_data(gan="fe")
 
         elapsed_time_train = datetime.datetime.now() - start_time_train
         train_time_ms = int(elapsed_time_train.total_seconds() * 1000)

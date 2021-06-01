@@ -15,7 +15,7 @@ from sklearn.metrics import classification_report
 from fltk.schedulers import MinCapableStepLR
 from fltk.util.arguments import Arguments
 from fltk.util.log import FLLogger
-
+from matplotlib import pyplot as plt
 import yaml
 
 from fltk.util.results import EpochData
@@ -49,6 +49,7 @@ class Client:
     dataset = None
     epoch_results: List[EpochData] = []
     epoch_counter = 0
+    TIME_HISTOGRAM_BINS = 100
 
     def __init__(self, id, log_rref, rank, world_size, config=None):
         logging.info(f'Welcome to client {id}')
@@ -70,6 +71,9 @@ class Client:
                                           self.args.get_scheduler_gamma(),
                                           self.args.get_min_lr())
 
+        # runtime metrics
+        self.epoch_times = []
+
     def init_device(self):
         if self.args.cuda and torch.cuda.is_available():
             return torch.device("cuda:0")
@@ -89,7 +93,8 @@ class Client:
         self.remote_log(log_line)
 
     def remote_log(self, message):
-        _remote_method_async(FLLogger.log, self.log_rref, self.id, message, time.time())
+        _remote_method_async(FLLogger.log, self.log_rref,
+                             self.id, message, time.time())
 
     def local_log(self, message):
         logging.info(f'[{self.id}: {time.time()}]: {message}')
@@ -105,7 +110,8 @@ class Client:
         self.args.rank = self.rank
         self.args.world_size = self.world_size
         # self.dataset = DistCIFAR10Dataset(self.args)
-        self.dataset = self.args.DistDatasets[self.args.dataset_name](self.args)
+        self.dataset = self.args.DistDatasets[self.args.dataset_name](
+            self.args)
         self.finished_init = True
         logging.info('Done with init')
 
@@ -118,7 +124,8 @@ class Client:
 
     def load_model_from_file(self, model_file_path):
         model_class = self.args.get_net()
-        default_model_path = os.path.join(self.args.get_default_model_folder_path(), model_class.__name__ + ".model")
+        default_model_path = os.path.join(
+            self.args.get_default_model_folder_path(), model_class.__name__ + ".model")
         return self.load_model_from_file(default_model_path)
 
     def get_nn_parameters(self):
@@ -134,7 +141,8 @@ class Client:
         This is used to ensure consistent default model behavior.
         """
         model_class = self.args.get_net()
-        default_model_path = os.path.join(self.args.get_default_model_folder_path(), model_class.__name__ + ".model")
+        default_model_path = os.path.join(
+            self.args.get_default_model_folder_path(), model_class.__name__ + ".model")
 
         return self.load_model_from_file(default_model_path)
 
@@ -151,9 +159,11 @@ class Client:
             try:
                 model.load_state_dict(torch.load(model_file_path))
             except:
-                self.args.get_logger().warning("Couldn't load model. Attempting to map CUDA tensors to CPU to solve error.")
+                self.args.get_logger().warning(
+                    "Couldn't load model. Attempting to map CUDA tensors to CPU to solve error.")
 
-                model.load_state_dict(torch.load(model_file_path, map_location=torch.device('cpu')))
+                model.load_state_dict(torch.load(
+                    model_file_path, map_location=torch.device('cpu')))
         else:
             self.args.get_logger().warning("Could not find model: {}".format(model_file_path))
 
@@ -206,7 +216,8 @@ class Client:
             # print statistics
             running_loss += loss.item()
             if i % self.args.get_log_interval() == 0:
-                self.args.get_logger().info('[%d, %5d] loss: %.3f' % (epoch, i, running_loss / self.args.get_log_interval()))
+                self.args.get_logger().info('[%d, %5d] loss: %.3f' % (
+                    epoch, i, running_loss / self.args.get_log_interval()))
                 final_running_loss = running_loss / self.args.get_log_interval()
                 running_loss = 0.0
 
@@ -246,9 +257,11 @@ class Client:
         class_precision = self.calculate_class_precision(confusion_mat)
         class_recall = self.calculate_class_recall(confusion_mat)
 
-        self.args.get_logger().debug('Test set: Accuracy: {}/{} ({:.0f}%)'.format(correct, total, accuracy))
+        self.args.get_logger().debug(
+            'Test set: Accuracy: {}/{} ({:.0f}%)'.format(correct, total, accuracy))
         self.args.get_logger().debug('Test set: Loss: {}'.format(loss))
-        self.args.get_logger().debug("Classification Report:\n" + classification_report(targets_, pred_))
+        self.args.get_logger().debug("Classification Report:\n" +
+                                     classification_report(targets_, pred_))
         self.args.get_logger().debug("Confusion Matrix:\n" + str(confusion_mat))
         self.args.get_logger().debug("Class precision: {}".format(str(class_precision)))
         self.args.get_logger().debug("Class recall: {}".format(str(class_recall)))
@@ -269,7 +282,8 @@ class Client:
         elapsed_time_test = datetime.datetime.now() - start_time_test
         test_time_ms = int(elapsed_time_test.total_seconds()*1000)
 
-        data = EpochData(self.epoch_counter, train_time_ms, test_time_ms, loss, accuracy, test_loss, class_precision, class_recall, client_id=self.id)
+        data = EpochData(self.epoch_counter, train_time_ms, test_time_ms, loss,
+                         accuracy, test_loss, class_precision, class_recall, client_id=self.id)
         self.epoch_results.append(data)
 
         # Copy GPU tensors to CPU
@@ -286,7 +300,8 @@ class Client:
         if not os.path.exists(self.args.get_save_model_folder_path()):
             os.mkdir(self.args.get_save_model_folder_path())
 
-        full_save_path = os.path.join(self.args.get_save_model_folder_path(), "model_" + str(self.client_idx) + "_" + str(epoch) + "_" + suffix + ".model")
+        full_save_path = os.path.join(self.args.get_save_model_folder_path(
+        ), "model_" + str(self.client_idx) + "_" + str(epoch) + "_" + suffix + ".model")
         torch.save(self.get_nn_parameters(), full_save_path)
 
     def calculate_class_precision(self, confusion_mat):
@@ -304,5 +319,19 @@ class Client:
     def get_client_datasize(self):
         return len(self.dataset.get_train_sampler())
 
+    def plot_time_data(self, bins: int = TIME_HISTOGRAM_BINS):
+        file_output = './output'
+
+        plt.clf()
+        plt.hist(self.epoch_times, bins=bins)
+        plt.xlabel('Client - time per epoch')
+        plt.ylabel('Density')
+
+        filename = f'{file_output}/time_per_epoch_client_{self.id}.png'
+        logging.info(f'Saving data at {filename}')
+
+        plt.savefig(filename)
+
     def __del__(self):
+        self.plot_time_data()
         print(f'Client {self.id} is stopping')

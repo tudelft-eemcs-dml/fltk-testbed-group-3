@@ -46,12 +46,14 @@ class ClientMDGAN(Client):
         self.args.distributed = True
         self.args.rank = self.rank
         self.args.world_size = self.world_size
-        self.dataset = self.args.DistDatasets[self.args.dataset_name](self.args)
+        self.dataset = self.args.DistDatasets[self.args.dataset_name](
+            self.args)
         self.imgs, self.lbls = self.dataset.load_train_dataset()
         del self.lbls
         self.finished_init = True
 
-        self.batch_size = self.args.DistDatasets[self.args.batch_size](self.args)
+        self.batch_size = self.args.DistDatasets[self.args.batch_size](
+            self.args)
 
         logging.info('Done with init')
 
@@ -129,8 +131,13 @@ class ClientMDGAN(Client):
         Xd, Xg = Xs
 
         for e in range(num_epoch):
+            epoch_start_time = datetime.datetime.now()
             self.train_md(self.epoch_counter, Xd)
             self.epoch_counter += 1
+            elapsed_time_epoch = datetime.datetime.now() - epoch_start_time
+            self.epoch_times.append(elapsed_time_epoch.total_seconds())
+
+            self.plot_time_data()
 
         # d_generator = self.discriminator(Xg)
         # self.loss_g = self.J_generator(d_generator)
@@ -145,7 +152,8 @@ class ClientMDGAN(Client):
         test_time_ms = int(elapsed_time_test.total_seconds()*1000)
 
         # data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, error, client_id=self.id)
-        data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, None, client_id=self.id)
+        data = GANEpochData(self.epoch_counter, train_time_ms,
+                            test_time_ms, None, client_id=self.id)
         # self.epoch_results.append(data)
 
         # self.swap_discriminator(current_epoch)
