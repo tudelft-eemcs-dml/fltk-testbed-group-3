@@ -50,6 +50,7 @@ class Client:
     epoch_results: List[EpochData] = []
     epoch_counter = 0
     TIME_HISTOGRAM_BINS = 100
+    NO_PLOT = True
 
     def __init__(self, id, log_rref, rank, world_size, config=None):
         logging.info(f'Welcome to client {id}')
@@ -320,6 +321,8 @@ class Client:
         return len(self.dataset.get_train_sampler())
 
     def plot_time_data(self, bins: int = TIME_HISTOGRAM_BINS):
+        if Client.NO_PLOT:
+            return
         file_output = './output'
 
         plt.clf()

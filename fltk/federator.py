@@ -72,6 +72,7 @@ class Federator:
     epoch_counter = 0
     client_data = {}
     TIME_HISTOGRAM_BINS = 100
+    NO_PLOT = True
 
     def __init__(self, client_id_triple, num_epochs=3, config=None, client_type=Client):
         log_rref = rpc.RRef(FLLogger())
@@ -211,6 +212,9 @@ class Federator:
         Path(path).mkdir(parents=True, exist_ok=True)
 
     def plot_time_data(self, gan: str = '', bins: int = TIME_HISTOGRAM_BINS):
+        if Federator.NO_PLOT:
+            return
+
         file_output = f'./{self.config.output_location}'
         self.ensure_path_exists(file_output)
 

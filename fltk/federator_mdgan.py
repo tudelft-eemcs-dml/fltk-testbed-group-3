@@ -208,14 +208,14 @@ class FederatorMDGAN(Federator):
         self.epoch_times.append(elapsed_time_epoch.total_seconds())
 
         logging.info('Gradient is updated')
-        if fl_round % 25 == 0:
+        if fl_round % 5 == 0:
             self.test_generator(fl_round)
 
     def plot_score_data(self):
         file_output = f'./{self.config.output_location}'
         self.ensure_path_exists(file_output)
 
-        plt.plot(range(0, self.config.epochs, 25), self.fids, 'b')
+        plt.plot(range(len(self.fids)), self.fids, 'b')
         # plt.plot(range(self.config.epochs), self.inceptions, 'r')
         plt.xlabel('Federator runs')
         plt.ylabel('FID')
@@ -250,6 +250,7 @@ class FederatorMDGAN(Federator):
             addition += 1
 
             self.plot_time_data(gan="md")
+            self.plot_score_data()
 
         elapsed_time_train = datetime.datetime.now() - start_time_train
         train_time_ms = int(elapsed_time_train.total_seconds() * 1000)

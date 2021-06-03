@@ -11,11 +11,11 @@ experiment_prefix: "experiment_sample"
 output_location: "output"
 tensor_board_active: true
 # uses all clients per round
-clients_per_round: 4
+clients_per_round: 2
 system:
   federator:
     hostname: "127.0.0.1"
     nic: "lo0"
     gan: "MD"
   clients:
-    amount: 4
+    amount: 2
