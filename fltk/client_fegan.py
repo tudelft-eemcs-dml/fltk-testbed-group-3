@@ -9,9 +9,7 @@ import logging
 import numpy as np
 
 from fltk.client import Client
-from fltk.util.wassdistance import SinkhornDistance
 from fltk.util.weight_init import *
-# from ot.lp import wasserstein_1d
 
 from fltk.util.results import EpochData, FeGANEpochData
 
@@ -55,7 +53,6 @@ class ClientFeGAN(Client):
         logging.info(f'Welcome to FE client {id}')
         self.latent_dim = 10
         self.batch_size = 3000
-        self.sinkhorn = SinkhornDistance(eps=0.1, max_iter=100)
 
     def return_distribution(self):
         labels = self.dataset.load_train_dataset()[1]
@@ -71,6 +68,8 @@ class ClientFeGAN(Client):
         del lbl
         self.finished_init = True
 
+        self.batch_size = 100
+
         logging.info('Done with init')
 
     def J_generator(self, disc_out):
@@ -81,6 +80,9 @@ class ClientFeGAN(Client):
 
     def B_hat(self, disc_out):
         return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - disc_out, min=self.epsilon)))
+
+    def wasserstein_loss(self, y_true, y_pred):
+        return np.mean(y_true * y_pred)
 
     def train_fe(self, epoch, net):
         generator, discriminator = net
@@ -96,7 +98,7 @@ class ClientFeGAN(Client):
         if self.args.distributed:
             self.dataset.train_sampler.set_epoch(epoch)
 
-        inputs = torch.from_numpy(self.inputs[[random.randrange(self.inputs.shape[0]) for _ in range(self.batch_size)]])
+        inputs = torch.from_numpy(self.inputs[[random.randrange(self.inputs.shape[0]) for _ in range(self.batch_size)]]).detach()
 
         optimizer_generator.zero_grad()
         optimizer_discriminator.zero_grad()
@@ -105,19 +107,30 @@ class ClientFeGAN(Client):
         generated_imgs = generator(noise)
         d_generator = discriminator(generated_imgs)
         generator_loss = self.J_generator(d_generator)
+        # generator_loss = torch.tensor([wasserstein_1d(torch.flatten(d_generator).detach().numpy(),
+        #                                               torch.ones(self.batch_size).detach().numpy())], requires_grad=True)
+        # generator_loss = torch.tensor([-1 * self.wasserstein_loss(torch.flatten(d_generator).detach().numpy(),
+        #                                               torch.ones(self.batch_size).detach().numpy())], requires_grad=True)
         generator_loss.require_grad = True
-        generator_loss.backward(retain_graph=True)
+        generator_loss.backward()
 
         fake_loss = self.B_hat(d_generator)
         real_loss = self.A_hat(discriminator(inputs))
-        # fake_loss, _, _ = self.sinkhorn(d_generator, torch.zeros(self.batch_size, 1))
-        # real_loss, _, _ = self.sinkhorn(discriminator(inputs), torch.ones(self.batch_size, 1))
+
+        discriminator_loss = 0.5 * (real_loss + fake_loss)
+
         # fake_loss = wasserstein_1d(torch.flatten(d_generator).detach().numpy(),
-        #                            torch.zeros(self.batch_size).detach().numpy())
+        #                                   torch.zeros(self.batch_size).detach().numpy())
         # real_loss = wasserstein_1d(torch.flatten(discriminator(inputs)).detach().numpy(),
-        #                            torch.ones(self.batch_size).detach().numpy())
-        discriminator_loss = torch.tensor([real_loss + fake_loss], requires_grad=True)
+        #                                   torch.ones(self.batch_size).detach().numpy())
+        # fake_loss = self.wasserstein_loss(torch.flatten(d_generator).detach().numpy(),
+        #                                   torch.zeros(self.batch_size).detach().numpy())
+        # real_loss = self.wasserstein_loss(torch.flatten(discriminator(inputs)).detach().numpy(),
+        #                                   torch.ones(self.batch_size).detach().numpy())
+        # discriminator_loss = torch.tensor([real_loss + fake_loss], requires_grad=True)
+        # discriminator_loss.require_grad = True
         discriminator_loss.backward()
+        generator_loss.backward()
 
         optimizer_generator.step()
         optimizer_discriminator.step()

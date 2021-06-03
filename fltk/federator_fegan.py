@@ -156,7 +156,7 @@ class FederatorFeGAN(Federator):
         plt.xlabel('Federator runs')
         plt.ylabel('FID')
 
-        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan_wd2.png'
+        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan_wassloss.png'
         logging.info(f'Saving data at {filename}')
 
         plt.savefig(filename)
@@ -179,7 +179,7 @@ class FederatorFeGAN(Federator):
         for res in responses:
             epoch_data = res[1].wait()
             # self.client_data[epoch_data.client_id].append(epoch_data)
-            logging.info(f'{res[0]} had a epoch data of {epoch_data}')
+            # logging.info(f'{res[0]} had a epoch data of {epoch_data}')
 
             client_generators.append(epoch_data.net[0])
             client_discriminators.append(epoch_data.net[1])
