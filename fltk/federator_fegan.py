@@ -1,6 +1,7 @@
 import math
 from collections import Counter
 from queue import Queue
+import json
 
 from pandas import np
 from scipy import stats
@@ -159,6 +160,10 @@ class FederatorFeGAN(Federator):
         logging.info(f'Saving data at {filename}')
 
         plt.savefig(filename)
+
+        json_data = {"fids": self.fids}
+        with open(f'{file_output}/fid_{self.config.epochs}_epochs_fe_gan.json', 'w') as fp:
+            json.dump(json_data, fp)
 
     def remote_run_epoch(self, epochs, epoch=None):
         responses = []

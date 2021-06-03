@@ -1,6 +1,7 @@
 import copy
 import math
 import random
+import json
 
 from pandas import np
 from torch.autograd import Variable
@@ -224,6 +225,10 @@ class FederatorMDGAN(Federator):
         logging.info(f'Saving data at {filename}')
 
         plt.savefig(filename)
+
+        json_data = {"fids": self.fids}
+        with open(f'{file_output}/fid_{self.config.epochs}_epochs_md_gan.json', 'w') as fp:
+            json.dump(json_data, fp)
 
     def run(self):
         """
