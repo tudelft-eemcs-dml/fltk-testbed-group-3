@@ -2,6 +2,7 @@ import datetime
 from typing import List
 
 from torch.autograd import Variable
+import torch.nn.functional as F
 from torch.distributed import rpc
 import logging
 import numpy as np
@@ -31,6 +32,7 @@ class ClientMDGAN(Client):
     epoch_results: List[EpochData] = []
     epoch_counter = 0
     epsilon = 0.00000001
+    adversarial_loss = torch.nn.MSELoss()
 
     def __init__(self, id, log_rref, rank, world_size, config=None, batch_size=20):
         super().__init__(id, log_rref, rank, world_size, config)
@@ -74,24 +76,37 @@ class ClientMDGAN(Client):
         if self.args.distributed:
             self.dataset.train_sampler.set_epoch(epoch)
 
-        rnd_indices = np.random.choice(len(self.imgs), size=self.batch_size)
-        inputs = torch.from_numpy(self.imgs[rnd_indices])
+        for batch_idx in (0, 1): #range(len(self.imgs) // self.batch_size + 1):
 
-        # zero the parameter gradients
-        self.optimizer.zero_grad()
+            rnd_indices = np.random.choice(len(self.imgs), size=self.batch_size)
+            inputs = torch.from_numpy(self.imgs[rnd_indices])
+            # try:
+            #     inputs = torch.from_numpy(self.imgs[batch_idx * self.batch_size:(batch_idx + 1) * self.batch_size])
+            # except:
+            #     inputs = torch.from_numpy(self.imgs[batch_idx * self.batch_size:])
 
-        # outputs = self.discriminator(inputs)
+            # zero the parameter gradients
+            self.optimizer.zero_grad()
 
-        # not sure about loss function - shall we use A_hat / B_hat?
-        # fake_loss = self.adversarial_loss(self.discriminator(Xd.detach()), fake)
-        # real_loss = self.adversarial_loss(outputs, labels)
-        disc_out = torch.clamp(1 - self.discriminator(Xd), min=self.epsilon)
-        fake_loss = self.B_hat(disc_out)
-        real_loss = self.A_hat(inputs)
+            # outputs = self.discriminator(inputs)
 
-        d_loss = (real_loss + fake_loss)
-        d_loss.backward()
-        self.optimizer.step()
+            # not sure about loss function - shall we use A_hat / B_hat?
+            # fake_loss = self.adversarial_loss(self.discriminator(Xd.detach()), fake)
+            # real_loss = self.adversarial_loss(outputs, labels)
+            # valid = Variable(torch.FloatTensor(self.batch_size, 1).fill_(1.0), requires_grad=False)
+            # fake = Variable(torch.FloatTensor(self.batch_size, 1).fill_(0.0), requires_grad=False)
+            # fake_loss = F.binary_cross_entropy(self.discriminator(Xd.detach()), fake)
+            # real_loss = F.binary_cross_entropy(self.discriminator(inputs), valid)
+
+            disc_out = torch.clamp(1 - self.discriminator(Xd.detach()), min=self.epsilon)
+            fake_loss = self.B_hat(disc_out)
+            real_loss = self.A_hat(inputs)
+
+            d_loss = (real_loss + fake_loss)
+            d_loss.backward()
+            self.optimizer.step()
+
+            self.discriminator.zero_grad()
 
         if self.args.should_save_model(epoch):
             self.save_model(epoch, self.args.get_epoch_save_end_suffix())
@@ -108,7 +123,7 @@ class ClientMDGAN(Client):
     def calculate_error(self, Xg):
         disc_out = torch.clamp(1 - self.discriminator(Xg), min=self.epsilon)
         b_hat = self.B_hat(disc_out)
-        return torch.autograd.grad(outputs=b_hat, inputs=disc_out)[0]
+        return b_hat
 
     def get_new_discriminator(self, discriminator):
         self.discriminator = discriminator
@@ -132,11 +147,9 @@ class ClientMDGAN(Client):
             self.train_md(self.epoch_counter, Xd)
             self.epoch_counter += 1
 
-        # d_generator = self.discriminator(Xg)
-        # self.loss_g = self.J_generator(d_generator)
+        d_generator = self.discriminator(Xg)
+        self.loss_g = self.J_generator(d_generator)
 
-        self.loss_g = torch.sum(self.calculate_error(Xg))
-        self.loss_g.requires_grad = True
         elapsed_time_train = datetime.datetime.now() - start_time_train
         train_time_ms = int(elapsed_time_train.total_seconds()*1000)
 
@@ -144,10 +157,8 @@ class ClientMDGAN(Client):
         elapsed_time_test = datetime.datetime.now() - start_time_test
         test_time_ms = int(elapsed_time_test.total_seconds()*1000)
 
-        # data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, error, client_id=self.id)
         data = GANEpochData(self.epoch_counter, train_time_ms, test_time_ms, None, client_id=self.id)
-        # self.epoch_results.append(data)
 
-        # self.swap_discriminator(current_epoch)
+        self.swap_discriminator(current_epoch)
 
         return data

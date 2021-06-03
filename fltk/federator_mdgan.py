@@ -22,7 +22,6 @@ logging.basicConfig(level=logging.DEBUG)
 
 class FederatorMDGAN(Federator):
 
-    # TODO: add lr/bs/latdim to args
     def __init__(self, client_id_triple, num_epochs=3, config=None):
         super().__init__(client_id_triple, num_epochs, config, ClientMDGAN)
         self.init_dataloader()
@@ -33,11 +32,10 @@ class FederatorMDGAN(Federator):
         #                                   lr=0.0002,
         #                                   betas=(0.5, 0.999))
         self.optimizer = torch.distributed.optim.DistributedOptimizer(
-            optim.Adam,  self.param_rrefs(self.generator), lr=2e-4, betas=(0.5, 0.9))
+            optim.Adam,  self.param_rrefs(self.generator), lr=2e-4, betas=(0.5, 0.99))
         self.latent_dim = 10
         # K <= N
         self.k = len(client_id_triple) - 1
-        # TODO this is merely wrong - federator cannot access whole dataset
         self.batch_size = math.floor(self.dataset[0].shape[0] / self.k) // 10
         self.introduce_clients()
         self.fids = []
@@ -100,24 +98,6 @@ class FederatorMDGAN(Federator):
             self.fids.append(fid)
             # self.inceptions.append(mu_gen)
 
-    # def w_grad(self, Fs, Xg):
-    #     w_grads = []
-    #
-    #     for param in self.generator.parameters():
-    #         for w in torch.flatten(param):
-    #             w_grad = torch.FloatTensor([0.0])
-    #             for en in Fs:
-    #                 for x in Xg:
-    #                     # change 1 to dx_i / dw_j:
-    #                     # RuntimeError: grad can be implicitly created only for scalar outputs
-    #                     w_grad += en * torch.autograd.grad(outputs=torch.Tensor().new_tensor(data=x, requires_grad=True),
-    #                                                        inputs=torch.Tensor().new_tensor(data=[w], requires_grad=True),
-    #                                                        create_graph=True, retain_graph=True, allow_unused=True)[0]
-    #
-    #             w_grad /= (self.batch_size * len(self.clients))
-    #             w_grads.append(w_grad)
-    #     return Variable(torch.FloatTensor(w_grads))
-
     def param_rrefs(self, module):
         """grabs remote references to the parameters of a module"""
         param_rrefs = []
@@ -136,22 +116,27 @@ class FederatorMDGAN(Federator):
         # broadcast generated datasets to clients and get trained discriminators back
         selected_clients = self.select_clients(self.config.clients_per_round)
 
-        X_g = []
-        X_d = []
-        for i in range(self.k):
-            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-            X_g.append(self.generator(noise.detach()))
-
-            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-            X_d.append(self.generator(noise.detach()))
-
-        samples_d = [random.randrange(self.k) for _ in range(len(selected_clients))]
-        samples_g = [random.randrange(self.k) for _ in range(len(selected_clients))]
+        # X_g = []
+        # X_d = []
+        # for i in range(self.k):
+        #     noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+        #     X_g.append(self.generator(noise.detach()))
+        #
+        #     noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+        #     X_d.append(self.generator(noise.detach()))
+        #
+        # samples_d = [random.randrange(self.k) for _ in range(len(selected_clients))]
+        # samples_g = [random.randrange(self.k) for _ in range(len(selected_clients))]
 
         for id, client in enumerate(selected_clients):
             # Sample noise as generator input and feed to clients based on their datat size
-            X_d_i = X_d[samples_d[id]]
-            X_g_i = X_g[samples_g[id]]
+            # X_d_i = X_d[samples_d[id]]
+            # X_g_i = X_g[samples_g[id]]
+            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            X_g_i = self.generator(noise)
+
+            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            X_d_i = self.generator(noise)
 
             responses.append((client, _remote_method_async(ClientMDGAN.run_epochs, client.ref,
                                                            epochs, fl_round, (X_d_i, X_g_i))))
@@ -160,16 +145,6 @@ class FederatorMDGAN(Federator):
         self.epoch_counter += epochs
         for res in responses:
             epoch_data = res[1].wait()
-            # self.client_data[epoch_data.client_id].append(epoch_data)
-
-        del X_g
-        del X_d
-        # TODO: using wrong loss with server discriminator, batch size divided to fit memory!!!
-        # client_errors = torch.stack(client_errors)
-        # g_loss = self.w_grad(client_errors, X_g)
-        # discriminator = Discriminator()
-        # discriminator.load_state_dict(copy.deepcopy(average_nn_parameters(client_discs)), strict=True)
-        # discriminator.eval()
 
         with torch.distributed.autograd.context() as G_context:
             loss_g_list = []
@@ -177,19 +152,11 @@ class FederatorMDGAN(Federator):
                 print("G step update")
                 loss_g_list.append(client_rref.rpc_async().loss_generator())
             loss_accumulated = loss_g_list[0].wait()
-            for j in range(1, len(loss_g_list)):
+            for j in range(0, len(loss_g_list)):
                 loss_accumulated += loss_g_list[j].wait()
 
             torch.distributed.autograd.backward(G_context, [loss_accumulated])
             self.optimizer.step(G_context)
-
-        # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-        # g_loss = self.J_generator(noise, discriminator)
-        # g_loss.backward()
-        #
-        # # g_loss.backward(self.generator.parameters())
-        # # g_loss.backward(self.generator.parameters())
-        # self.optimizer.step()
 
         logging.info('Gradient is updated')
         if fl_round % 25 == 0:
