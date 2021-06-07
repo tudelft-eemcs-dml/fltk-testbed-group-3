@@ -11,21 +11,23 @@ class Generator(nn.Module):
 
         self.conv_blocks = nn.Sequential(
             nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 128, 1, stride=1, padding=1), #3
+            nn.Conv2d(128, 128, 3, stride=1, padding=1),
             nn.BatchNorm2d(128, 0.8),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Upsample(scale_factor=2),
             nn.Conv2d(128, 64, 3, stride=1, padding=1),
             nn.BatchNorm2d(64, 0.8),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, 3, 1, stride=1, padding=1), #3
+            nn.Conv2d(64, 1, 3, stride=1, padding=1), #3
             nn.Tanh(),
         )
 
     def forward(self, z):
         out = self.l1(z)
         out = out.view(out.shape[0], 128, self.init_size, self.init_size)
+        print('1!!!!!!!!!!!!!!!', out.shape)
         img = self.conv_blocks(out)
+        print('2!!!!!!!!!!!!!!!', out.shape)
         return img
 
 
@@ -54,6 +56,8 @@ class Discriminator(nn.Module):
     def forward(self, img):
         out = self.model(img)
         out = out.view(out.shape[0], -1)
+        print('3!!!!!!!!!!!!!!!', out.shape)
         validity = self.adv_layer(out)
+        print('4!!!!!!!!!!!!!!!', validity.shape)
 
         return validity
