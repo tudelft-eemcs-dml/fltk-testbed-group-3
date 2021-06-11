@@ -11,7 +11,7 @@ from fltk.client_fegan import _remote_method_async, ClientFeGAN
 from fltk.federator import *
 from fltk.strategy.client_selection import balanced_sampling
 from fltk.util.fed_avg import kl_weighting
-from fltk.nets.ls_gan import *
+from fltk.nets.cifar_ls_gan import *
 from fltk.util.fid_score import calculate_activation_statistics, calculate_frechet_distance
 from fltk.util.inception import InceptionV3
 from fltk.util.weight_init import *
@@ -115,26 +115,23 @@ class FederatorFeGAN(Federator):
                         done_q = True
 
             self.groups.append(g)
-            # TODO: should be hyperparam
             if len(self.groups) > 10:
                 done = True
 
     def test(self, fl_round):
+        test_batch = 1000
         with torch.no_grad():
             file_output = f'./{self.config.output_location}'
             self.ensure_path_exists(file_output)
-            fid_z = Variable(torch.FloatTensor(np.random.normal(
-                0, 1, (self.test_imgs.shape[0], self.latent_dim))))
+            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (test_batch, self.latent_dim))))
             gen_imgs = self.generator(fid_z.detach())
-            mu_gen, sigma_gen = calculate_activation_statistics(
-                gen_imgs, self.fic_model)
-            mu_test, sigma_test = calculate_activation_statistics(
-                torch.from_numpy(self.test_imgs), self.fic_model)
-            fid = calculate_frechet_distance(
-                mu_gen, sigma_gen, mu_test, sigma_test)
+            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, self.fic_model)
+            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(self.test_imgs[:test_batch]), self.fic_model)
+            fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
             print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
             self.fids.append(fid)
+            print(self.fids)
             # self.inceptions.append(mu_gen)
 
     def checkpoint(self, fl_round):
@@ -156,7 +153,7 @@ class FederatorFeGAN(Federator):
         plt.xlabel('Federator runs')
         plt.ylabel('FID')
 
-        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan_wassloss.png'
+        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan_wd4.png'
         logging.info(f'Saving data at {filename}')
 
         plt.savefig(filename)

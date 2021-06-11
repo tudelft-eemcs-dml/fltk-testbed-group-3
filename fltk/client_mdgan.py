@@ -10,7 +10,7 @@ from scipy.integrate import odeint
 
 from fltk.client import Client
 from fltk.util.weight_init import *
-from fltk.nets.ls_gan import *
+from fltk.nets.cifar_ls_gan import *
 
 from fltk.util.results import EpochData, GANEpochData
 
@@ -78,29 +78,20 @@ class ClientMDGAN(Client):
         if self.args.distributed:
             self.dataset.train_sampler.set_epoch(epoch)
 
-        for batch_idx in (0, 1): #range(len(self.imgs) // self.batch_size + 1):
+        for batch_idx in range(len(self.imgs) // self.batch_size + 1):
 
-            rnd_indices = np.random.choice(len(self.imgs), size=self.batch_size)
-            inputs = torch.from_numpy(self.imgs[rnd_indices])
-            # try:
-            #     inputs = torch.from_numpy(self.imgs[batch_idx * self.batch_size:(batch_idx + 1) * self.batch_size])
-            # except:
-            #     inputs = torch.from_numpy(self.imgs[batch_idx * self.batch_size:])
+            try:
+                inputs = torch.from_numpy(self.imgs[batch_idx * self.batch_size:(batch_idx + 1) * self.batch_size])
+            except:
+                inputs = torch.from_numpy(self.imgs[batch_idx * self.batch_size:])
+
+            # rnd_indices = np.random.choice(len(self.imgs), size=self.batch_size)
+            # inputs = torch.from_numpy(self.imgs[rnd_indices])
 
             # zero the parameter gradients
             self.optimizer.zero_grad()
 
-            # outputs = self.discriminator(inputs)
-
-            # not sure about loss function - shall we use A_hat / B_hat?
-            # fake_loss = self.adversarial_loss(self.discriminator(Xd.detach()), fake)
-            # real_loss = self.adversarial_loss(outputs, labels)
-            # valid = Variable(torch.FloatTensor(self.batch_size, 1).fill_(1.0), requires_grad=False)
-            # fake = Variable(torch.FloatTensor(self.batch_size, 1).fill_(0.0), requires_grad=False)
-            # fake_loss = F.binary_cross_entropy(self.discriminator(Xd.detach()), fake)
-            # real_loss = F.binary_cross_entropy(self.discriminator(inputs), valid)
-
-            disc_out = torch.clamp(1 - self.discriminator(Xd.detach()), min=self.epsilon)
+            disc_out = torch.clamp(1 - self.discriminator(Xd), min=self.epsilon)
             fake_loss = self.B_hat(disc_out)
             real_loss = self.A_hat(inputs)
 
@@ -142,6 +133,11 @@ class ClientMDGAN(Client):
         return (1 / self.batch_size) * torch.sum(torch.log(torch.clamp(1 - disc_out, min=self.epsilon)))
 
     def run_epochs(self, num_epoch, current_epoch=1, Xs=None):
+        try:
+            self.loss_g.zero_grad()
+        except:
+            pass
+
         start_time_train = datetime.datetime.now()
         Xd, Xg = Xs
 
@@ -156,6 +152,7 @@ class ClientMDGAN(Client):
 
         d_generator = self.discriminator(Xg)
         self.loss_g = self.J_generator(d_generator)
+        self.loss_g.backward(retain_graph=True)
 
         elapsed_time_train = datetime.datetime.now() - start_time_train
         train_time_ms = int(elapsed_time_train.total_seconds()*1000)

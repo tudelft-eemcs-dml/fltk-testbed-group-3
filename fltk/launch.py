@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 def run_ps(rpc_ids_triple, args):
     print(f'Starting the federator...')
-    fed = FederatorMDGAN(rpc_ids_triple, config=args)
+    fed = FederatorFeGAN(rpc_ids_triple, config=args)
     fed.run()
 
 

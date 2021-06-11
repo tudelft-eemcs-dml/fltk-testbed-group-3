@@ -11,7 +11,7 @@ from fltk.federator import *
 from fltk.client_mdgan import ClientMDGAN, _remote_method_async
 from fltk.util.fid_score import calculate_activation_statistics, calculate_frechet_distance
 from fltk.util.inception import InceptionV3
-from fltk.nets.ls_gan import *
+from fltk.nets.cifar_ls_gan import *
 from fltk.util.weight_init import *
 import logging
 import matplotlib.pyplot as plt
@@ -37,7 +37,7 @@ class FederatorMDGAN(Federator):
         self.latent_dim = 10
         # K <= N
         self.k = len(client_id_triple) - 1
-        self.batch_size = math.floor(self.dataset[0].shape[0] / self.k) // 10
+        self.batch_size = math.floor(self.dataset[0].shape[0] / self.k) // 2
         self.introduce_clients()
         self.fids = []
         self.discriminator = Discriminator(32)
@@ -193,7 +193,7 @@ class FederatorMDGAN(Federator):
         file_output = f'./{self.config.output_location}'
         self.ensure_path_exists(file_output)
 
-        plt.plot(range(len(self.fids)), self.fids, 'b')
+        plt.plot(range(0, self.config.epochs, 5), self.fids, 'b')
         # plt.plot(range(self.config.epochs), self.inceptions, 'r')
         plt.xlabel('Federator runs')
         plt.ylabel('FID')
