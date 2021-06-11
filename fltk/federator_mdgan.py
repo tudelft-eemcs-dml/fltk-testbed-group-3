@@ -10,7 +10,7 @@ from fltk.federator import *
 from fltk.client_mdgan import ClientMDGAN, _remote_method_async
 from fltk.util.fid_score import calculate_activation_statistics, calculate_frechet_distance
 from fltk.util.inception import InceptionV3
-from fltk.nets.ls_gan import *
+from fltk.nets.cifar_ls_gan import *
 from fltk.util.weight_init import *
 import logging
 import matplotlib.pyplot as plt
@@ -36,7 +36,7 @@ class FederatorMDGAN(Federator):
         self.latent_dim = 10
         # K <= N
         self.k = len(client_id_triple) - 1
-        self.batch_size = math.floor(self.dataset[0].shape[0] / self.k) // 10
+        self.batch_size = math.floor(self.dataset[0].shape[0] / self.k) // 2
         self.introduce_clients()
         self.fids = []
         self.discriminator = Discriminator(32)
@@ -116,27 +116,28 @@ class FederatorMDGAN(Federator):
         # broadcast generated datasets to clients and get trained discriminators back
         selected_clients = self.select_clients(self.config.clients_per_round)
 
-        # X_g = []
-        # X_d = []
-        # for i in range(self.k):
-        #     noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-        #     X_g.append(self.generator(noise.detach()))
-        #
-        #     noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-        #     X_d.append(self.generator(noise.detach()))
-        #
-        # samples_d = [random.randrange(self.k) for _ in range(len(selected_clients))]
-        # samples_g = [random.randrange(self.k) for _ in range(len(selected_clients))]
+        X_g = []
+        X_d = []
+        for i in range(self.k):
+            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            X_g.append(self.generator(noise.detach()))
+
+            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            X_d.append(self.generator(noise.detach()))
+
+        samples_d = [random.randrange(self.k) for _ in range(len(selected_clients))]
+        samples_g = [random.randrange(self.k) for _ in range(len(selected_clients))]
 
         for id, client in enumerate(selected_clients):
             # Sample noise as generator input and feed to clients based on their datat size
-            # X_d_i = X_d[samples_d[id]]
-            # X_g_i = X_g[samples_g[id]]
-            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-            X_g_i = self.generator(noise)
+            X_d_i = X_d[samples_d[id]]
+            X_g_i = X_g[samples_g[id]]
 
-            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-            X_d_i = self.generator(noise)
+            # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            # X_g_i = self.generator(noise)
+            #
+            # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            # X_d_i = self.generator(noise)
 
             responses.append((client, _remote_method_async(ClientMDGAN.run_epochs, client.ref,
                                                            epochs, fl_round, (X_d_i, X_g_i))))
@@ -159,14 +160,14 @@ class FederatorMDGAN(Federator):
             self.optimizer.step(G_context)
 
         logging.info('Gradient is updated')
-        if fl_round % 25 == 0:
+        if fl_round % 5 == 0:
             self.test_generator(fl_round)
 
     def plot_score_data(self):
         file_output = f'./{self.config.output_location}'
         self.ensure_path_exists(file_output)
 
-        plt.plot(range(0, self.config.epochs, 25), self.fids, 'b')
+        plt.plot(range(0, self.config.epochs, 5), self.fids, 'b')
         # plt.plot(range(self.config.epochs), self.inceptions, 'r')
         plt.xlabel('Federator runs')
         plt.ylabel('FID')
