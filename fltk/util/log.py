@@ -2,6 +2,7 @@ import logging
 
 from torch.distributed import rpc
 
+
 class FLLogger:
     @staticmethod
     @rpc.functions.async_execution

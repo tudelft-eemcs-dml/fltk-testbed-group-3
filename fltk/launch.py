@@ -1,13 +1,11 @@
 import os
-import sys
 import torch.distributed.rpc as rpc
 import logging
 
-import yaml
-import argparse
-
 import torch.multiprocessing as mp
 from fltk.federator import Federator
+from fltk.federator_fegan import FederatorFeGAN
+from fltk.federator_mdgan import FederatorMDGAN
 from fltk.util.base_config import BareConfig
 
 logging.basicConfig(level=logging.DEBUG)
@@ -15,10 +13,11 @@ logging.basicConfig(level=logging.DEBUG)
 
 def run_ps(rpc_ids_triple, args):
     print(f'Starting the federator...')
-    fed = Federator(rpc_ids_triple, config=args)
+    fed = FederatorFeGAN(rpc_ids_triple, config=args)
     fed.run()
 
-def run_single(rank, world_size, host = None, args = None, nic = None):
+
+def run_single(rank, world_size, host=None, args=None, nic=None):
     logging.info(f'Starting with rank={rank} and world size={world_size}')
     if host:
         os.environ['MASTER_ADDR'] = host
@@ -37,7 +36,6 @@ def run_single(rank, world_size, host = None, args = None, nic = None):
         rpc_timeout=0,  # infinite timeout
         init_method=f'tcp://{os.environ["MASTER_ADDR"]}:{os.environ["MASTER_PORT"]}'
     )
-
     if rank != 0:
         logging.info(f'Starting worker {rank}')
         rpc.init_rpc(
@@ -64,9 +62,12 @@ def run_single(rank, world_size, host = None, args = None, nic = None):
 def run_spawn(config):
     world_size = config.world_size
     master_address = config.federator_host
+    nic = config.nic
+    mp.set_sharing_strategy("file_system")
+    mp.set_start_method("spawn", True)
     mp.spawn(
         run_single,
-        args=(world_size, master_address, config),
+        args=(world_size, master_address, config, nic),
         nprocs=world_size,
         join=True
     )

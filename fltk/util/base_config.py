@@ -7,6 +7,7 @@ from fltk.nets import Cifar10CNN, FashionMNISTCNN, Cifar100ResNet, FashionMNISTR
 SEED = 1
 torch.manual_seed(SEED)
 
+
 class BareConfig:
 
     def __init__(self):
@@ -124,12 +125,13 @@ class BareConfig:
             if 'federator' in cfg['system']:
                 if 'hostname' in cfg['system']['federator']:
                     self.federator_host = cfg['system']['federator']['hostname']
+                if 'nic' in cfg['system']['federator']:
+                    self.nic = cfg['system']['federator']['nic']
         if 'cuda' in cfg:
             if cfg['cuda']:
                 self.cuda = True
             else:
                 self.cuda = False
-
 
     def init_logger(self, logger):
         self.logger = logger

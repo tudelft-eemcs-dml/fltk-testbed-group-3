@@ -59,13 +59,13 @@ class Arguments:
 
         }
         self.net = None
-        self.set_net_by_name('Cifar10CNN')
+        self.set_net_by_name('FashionMNISTCNN')
         # self.net = FashionMNISTCNN
         # self.net = Cifar100ResNet
         # self.net = FashionMNISTResNet
         # self.net = Cifar10ResNet
         # self.net = Cifar10ResNet
-        self.dataset_name = 'cifar10'
+        self.dataset_name = 'fashion-mnist'
         self.train_data_loader_pickle_path = {
             'cifar10': 'data_loaders/cifar10/train_data_loader.pickle',
             'fashion-mnist': 'data_loaders/fashion-mnist/train_data_loader.pickle',

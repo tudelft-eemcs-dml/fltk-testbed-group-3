@@ -88,6 +88,7 @@ def create_federator(compute, project, zone, name_template, rank, region, machin
         zone=zone,
         body=client_config).execute()
 
+
 def create_client(compute, project, zone, name_template, rank, world_size, host, nic, region, machine_image):
     machine_type = f'zones/{zone}/machineTypes/g1-small'
     instance_name = name_template.format(rank=rank)
@@ -205,7 +206,6 @@ def wait_for_operation(compute, project, zone, operation):
 # [END wait_for_operation]
 
 
-
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Create VMs in GCP for Federated Learning')
@@ -266,4 +266,3 @@ if __name__ == "__main__":
         wait_for_operation(compute, project_name, zone_name, operation['name'])
 
     print("""Now login via ssh into the federator VM and start the experiment.""")
-

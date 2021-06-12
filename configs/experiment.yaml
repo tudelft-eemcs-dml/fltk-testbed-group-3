@@ -1,19 +1,20 @@
 ---
 # Experiment configuration
-total_epochs: 5
+total_epochs: 50
 epochs_per_cycle: 1
 wait_for_clients: true
 net: Cifar10CNN
 dataset: cifar10
 # Use cuda is available; setting to false will force CPU
-cuda: true
+cuda: false
 experiment_prefix: 'experiment_sample'
 output_location: 'output'
 tensor_board_active: true
-clients_per_round: 1
+# uses all clients per round
+clients_per_round: 5
 system:
   federator:
-    hostname: '131.180.40.72'
-    nic: 'wlo1'
+    hostname: '10.46.226.83'
+    nic: 'wlp0s20f3'
   clients:
-    amount: 1
+    amount: 5
