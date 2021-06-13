@@ -17,6 +17,7 @@ from fltk.util.log import FLLogger
 from torchsummary import summary
 from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
+from matplotlib import pyplot as plt
 import logging
 
 from fltk.util.results import EpochData
@@ -70,6 +71,8 @@ class Federator:
     clients: List[ClientRef] = []
     epoch_counter = 0
     client_data = {}
+    TIME_HISTOGRAM_BINS = 100
+    NO_PLOT = True
 
     def __init__(self, client_id_triple, num_epochs=3, config=None, client_type=Client):
         log_rref = rpc.RRef(FLLogger())
@@ -79,16 +82,22 @@ class Federator:
         self.config = config
         self.tb_path = config.output_location
         self.ensure_path_exists(self.tb_path)
-        self.tb_writer = SummaryWriter(f'{self.tb_path}/{config.experiment_prefix}_federator')
+        self.tb_writer = SummaryWriter(
+            f'{self.tb_path}/{config.experiment_prefix}_federator')
         self.create_clients(client_id_triple, client_type)
         self.config.init_logger(logging)
+
+        # runtime metrics
+        self.epoch_times = []
 
     def create_clients(self, client_id_triple, client_type):
         for id, rank, world_size in client_id_triple:
             client = rpc.remote(id, client_type, kwargs=dict(id=id, log_rref=self.log_rref, rank=rank,
                                                              world_size=world_size, config=self.config))
-            writer = SummaryWriter(f'{self.tb_path}/{self.config.experiment_prefix}_client_{id}')
-            self.clients.append(ClientRef(id, client, tensorboard_writer=writer))
+            writer = SummaryWriter(
+                f'{self.tb_path}/{self.config.experiment_prefix}_client_{id}')
+            self.clients.append(
+                ClientRef(id, client, tensorboard_writer=writer))
             self.client_data[id] = []
 
     def select_clients(self, n=2):
@@ -120,7 +129,8 @@ class Federator:
             responses = []
             for client in self.clients:
                 if client.name not in ready_clients:
-                    responses.append((client, _remote_method_async(Client.is_ready, client.ref)))
+                    responses.append(
+                        (client, _remote_method_async(Client.is_ready, client.ref)))
             all_ready = True
             for res in responses:
                 result = res[1].wait()
@@ -139,7 +149,8 @@ class Federator:
         client_weights = []
         selected_clients = self.select_clients(self.config.clients_per_round)
         for client in selected_clients:
-            responses.append((client, _remote_method_async(self.client_type.run_epochs, client.ref, num_epoch=epochs)))
+            responses.append((client, _remote_method_async(
+                self.client_type.run_epochs, client.ref, num_epoch=epochs)))
         self.epoch_counter += epochs
         for res in responses:
             epoch_data, weights = res[1].wait()
@@ -170,15 +181,18 @@ class Federator:
     def update_client_data_sizes(self):
         responses = []
         for client in self.clients:
-            responses.append((client, _remote_method_async(self.client_type.get_client_datasize, client.ref)))
+            responses.append((client, _remote_method_async(
+                self.client_type.get_client_datasize, client.ref)))
         for res in responses:
             res[0].data_size = res[1].wait()
-            logging.info(f'{res[0]} had a result of datasize={res[0].data_size}')
+            logging.info(
+                f'{res[0]} had a result of datasize={res[0].data_size}')
 
     def remote_test_sync(self):
         responses = []
         for client in self.clients:
-            responses.append((client, _remote_method_async(self.client_type.test, client.ref)))
+            responses.append((client, _remote_method_async(
+                self.client_type.test, client.ref)))
 
         for res in responses:
             accuracy, loss, class_precision, class_recall = res[1].wait()
@@ -196,6 +210,23 @@ class Federator:
 
     def ensure_path_exists(self, path):
         Path(path).mkdir(parents=True, exist_ok=True)
+
+    def plot_time_data(self, gan: str = '', bins: int = TIME_HISTOGRAM_BINS):
+        if Federator.NO_PLOT:
+            return
+
+        file_output = f'./{self.config.output_location}'
+        self.ensure_path_exists(file_output)
+
+        plt.clf()
+        plt.hist(self.epoch_times, bins=bins)
+        plt.xlabel('Federator - time per epoch')
+        plt.ylabel('Density')
+
+        filename = f'{file_output}/time_per_epoch_{self.config.epochs}_epochs_{gan}_gan.png'
+        logging.info(f'Saving data at {filename}')
+
+        plt.savefig(filename)
 
     def run(self):
         """
@@ -223,4 +254,3 @@ class Federator:
         logging.info(f'Saving data')
         self.save_epoch_data()
         logging.info(f'Federator is stopping')
-

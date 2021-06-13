@@ -53,7 +53,8 @@ class ClientMDGAN(Client):
         del self.lbls
         self.finished_init = True
 
-        self.batch_size = self.args.DistDatasets[self.args.batch_size](self.args)
+        self.batch_size = self.args.DistDatasets[self.args.batch_size](
+            self.args)
 
         logging.info('Done with init')
 
@@ -140,8 +141,13 @@ class ClientMDGAN(Client):
         Xd, Xg = Xs
 
         for e in range(num_epoch):
+            epoch_start_time = datetime.datetime.now()
             self.train_md(self.epoch_counter, Xd)
             self.epoch_counter += 1
+            elapsed_time_epoch = datetime.datetime.now() - epoch_start_time
+            self.epoch_times.append(elapsed_time_epoch.total_seconds())
+
+            self.plot_time_data()
 
         d_generator = self.discriminator(Xg)
         self.loss_g = self.J_generator(d_generator)

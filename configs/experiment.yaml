@@ -7,14 +7,15 @@ net: Cifar10CNN
 dataset: cifar10
 # Use cuda is available; setting to false will force CPU
 cuda: false
-experiment_prefix: 'experiment_sample'
-output_location: 'output'
+experiment_prefix: "experiment_sample"
+output_location: "output"
 tensor_board_active: true
 # uses all clients per round
-clients_per_round: 5
+clients_per_round: 2
 system:
   federator:
-    hostname: '10.46.226.83'
-    nic: 'wlp0s20f3'
+    hostname: "127.0.0.1"
+    nic: "lo0"
+    gan: "MD"
   clients:
-    amount: 5
+    amount: 2
