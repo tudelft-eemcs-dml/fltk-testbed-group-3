@@ -93,15 +93,12 @@ class FederatorMDGAN(Federator):
             file_output = f'./{self.config.output_location}'
             self.ensure_path_exists(file_output)
             test_imgs = self.testset[0]
-            fid_z = Variable(torch.FloatTensor(np.random.normal(
-                0, 1, (test_imgs.shape[0], self.latent_dim))))
+
+            fid_z = Variable(torch.FloatTensor(np.random.normal(0, 1, (test_imgs.shape[0], self.latent_dim))))
             gen_imgs = self.generator(fid_z.detach())
-            mu_gen, sigma_gen = calculate_activation_statistics(
-                gen_imgs, self.fic_model)
-            mu_test, sigma_test = calculate_activation_statistics(
-                torch.from_numpy(test_imgs), self.fic_model)
-            fid = calculate_frechet_distance(
-                mu_gen, sigma_gen, mu_test, sigma_test)
+            mu_gen, sigma_gen = calculate_activation_statistics(gen_imgs, self.fic_model)
+            mu_test, sigma_test = calculate_activation_statistics(torch.from_numpy(test_imgs), self.fic_model)
+            fid = calculate_frechet_distance(mu_gen, sigma_gen, mu_test, sigma_test)
             print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
             self.fids.append(fid)
@@ -129,12 +126,12 @@ class FederatorMDGAN(Federator):
         X_g = []
         X_d = []
         for i in range(self.k):
-            noise = Variable(torch.FloatTensor(np.random.normal(
-                0, 1, (self.batch_size, self.latent_dim))))
+
+            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
             X_g.append(self.generator(noise.detach()))
 
-            noise = Variable(torch.FloatTensor(np.random.normal(
-                0, 1, (self.batch_size, self.latent_dim))))
+            noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+
             X_d.append(self.generator(noise.detach()))
 
         samples_d = [random.randrange(self.k)
@@ -154,6 +151,12 @@ class FederatorMDGAN(Federator):
                 0, 1, (self.batch_size, self.latent_dim))))
             X_d_i = self.generator(noise)
 
+            # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            # X_g_i = self.generator(noise)
+            #
+            # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
+            # X_d_i = self.generator(noise)
+
             responses.append((client, _remote_method_async(ClientMDGAN.run_epochs, client.ref,
                                                            epochs, fl_round, (X_d_i, X_g_i))))
             client_rrefs.append(client.ref)
@@ -161,6 +164,7 @@ class FederatorMDGAN(Federator):
         self.epoch_counter += epochs
         for res in responses:
             epoch_data = res[1].wait()
+
 
         with torch.distributed.autograd.context() as G_context:
             loss_g_list = []
@@ -173,17 +177,6 @@ class FederatorMDGAN(Federator):
 
             torch.distributed.autograd.backward(G_context, [loss_accumulated])
             self.optimizer.step(G_context)
-
-        # noise = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.latent_dim))))
-        # g_loss = self.J_generator(noise, discriminator)
-        # g_loss.backward()
-        #
-        # # g_loss.backward(self.generator.parameters())
-        # # g_loss.backward(self.generator.parameters())
-        # self.optimizer.step()
-
-        elapsed_time_epoch = datetime.datetime.now() - epoch_start_time
-        self.epoch_times.append(elapsed_time_epoch.total_seconds())
 
         logging.info('Gradient is updated')
         if fl_round % 5 == 0:

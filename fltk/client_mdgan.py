@@ -48,8 +48,7 @@ class ClientMDGAN(Client):
         self.args.distributed = True
         self.args.rank = self.rank
         self.args.world_size = self.world_size
-        self.dataset = self.args.DistDatasets[self.args.dataset_name](
-            self.args)
+        self.dataset = self.args.DistDatasets[self.args.dataset_name](self.args)
         self.imgs, self.lbls = self.dataset.load_train_dataset()
         del self.lbls
         self.finished_init = True
