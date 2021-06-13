@@ -30,7 +30,7 @@ class FederatorFeGAN(Federator):
         self.discriminator = Discriminator()
         self.discriminator.apply(weights_init_normal)
         self.latent_dim = 10
-        self.batch_size = 3000
+        self.batch_size = 300
         self.fids = []
         self.inceptions = []
         self.fic_model = InceptionV3()
@@ -54,7 +54,6 @@ class FederatorFeGAN(Federator):
         self.init_groups(c, len(num_per_class))
 
         # we need entropies for client weighting during kl-divergence calculations
-        # idea from code, not from official paper...
         all_samples = sum(num_per_class)
         rat_per_class = [float(n / all_samples) for n in num_per_class]
         cleaned_distributions = [[c for _, c in dist] for dist in self.class_distributions]
@@ -73,7 +72,6 @@ class FederatorFeGAN(Federator):
         del lbls
         logging.info('Done with init')
 
-    # TODO: cleanup
     def init_groups(self, c, label_size):
         gp_size = math.ceil(c * len(self.clients))
         done = False
@@ -115,7 +113,7 @@ class FederatorFeGAN(Federator):
                 done = True
 
     def test(self, fl_round):
-        test_batch = 1000
+        test_batch = self.test_imgs.shape[0]
         with torch.no_grad():
             file_output = f'./{self.config.output_location}'
             self.ensure_path_exists(file_output)
@@ -127,7 +125,6 @@ class FederatorFeGAN(Federator):
             print("FL-round {} FID Score: {}, IS Score: {}".format(fl_round, fid, mu_gen))
 
             self.fids.append(fid)
-            print(self.fids)
             # self.inceptions.append(mu_gen)
 
     def checkpoint(self, fl_round):
@@ -149,7 +146,7 @@ class FederatorFeGAN(Federator):
         plt.xlabel('Federator runs')
         plt.ylabel('FID')
 
-        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan_wd4.png'
+        filename = f'{file_output}/{self.config.epochs}_epochs_fe_gan.png'
         logging.info(f'Saving data at {filename}')
 
         plt.savefig(filename)
